@@ -166,18 +166,23 @@ BEGIN
    /* ora_tables */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_tables', schema);
    EXECUTE format(ora_tables_sql, schema, server, max_viewdef);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_tables IS ''Oracle tables on foreign server "%I"''', schema, server);
    /* ora_columns */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_columns', schema);
    EXECUTE format(ora_columns_sql, schema, server, max_viewdef);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_columns IS ''columns of Oracle tables and views on foreign server "%I"''', schema, server);
    /* ora_checks */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_checks', schema);
    EXECUTE format(ora_checks_sql, schema, server, max_viewdef);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_checks IS ''Oracle check constraints on foreign server "%I"''', schema, server);
    /* ora_foreign_keys */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_foreign_keys', schema);
    EXECUTE format(ora_foreign_keys_sql, schema, server, max_viewdef);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_foreign_keys IS ''Oracle foreign key columns on foreign server "%I"''', schema, server);
    /* ora_keys */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_keys', schema);
    EXECUTE format(ora_keys_sql, schema, server, max_viewdef);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_keys IS ''Oracle primary and unique key columns on foreign server "%I"''', schema, server);
    /* ora_views */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_views', schema);
    EXECUTE format(ora_views_sql, schema, server, max_viewdef);
@@ -185,7 +190,9 @@ BEGIN
    EXECUTE format('DROP VIEW IF EXISTS %I.ora_functions', schema);
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_func_src', schema);
    EXECUTE format(ora_func_src_sql, schema, server, max_viewdef);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_func_src IS ''source lines for Oracle functions and procedures on foreign server "%I"''', schema, server);
    EXECUTE format(ora_functions_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.ora_functions IS ''Oracle functions and procedures on foreign server "%I"''', schema, server);
 END;$$;
 
 COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle remote tables for metadata';
