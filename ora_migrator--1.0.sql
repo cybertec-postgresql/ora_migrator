@@ -120,8 +120,47 @@ $$DECLARE
          'FROM all_constraints con\n'
          '   JOIN all_cons_columns col\n'
          '      ON (con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name)\n'
-         'WHERE con.constraint_type IN (''''P'''', ''''U'''')\n'
+         'WHERE con.constraint_type IN (''''P'''', ''''U'''')'
       ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_views_sql text := E'CREATE FOREIGN TABLE %I.ora_views (\n'
+      '   schema     varchar(128) NOT NULL,\n'
+      '   view_name  varchar(128) NOT NULL,\n'
+      '   definition text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       view_name,\n'
+         '       text\n'
+         'FROM all_views'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_func_src_sql text := E'CREATE FOREIGN TABLE %I.ora_func_src (\n'
+      '   schema        varchar(128) NOT NULL,\n'
+      '   function_name varchar(128) NOT NULL,\n'
+      '   is_procedure  boolean      NOT NULL,\n'
+      '   line_number   integer      NOT NULL,\n'
+      '   line          text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT pro.owner,\n'
+         '       pro.object_name,\n'
+         '       CASE WHEN pro.object_type = ''''PROCEDURE'''' THEN 1 ELSE 0 END is_procedure,\n'
+         '       src.line,\n'
+         '       src.text\n'
+         'FROM all_procedures pro\n'
+         '   JOIN all_source src\n'
+         '      ON pro.owner = src.owner\n'
+         '         AND pro.object_name = src.name\n'
+         '         AND pro.object_type = src.type\n'
+         'WHERE pro.object_type IN (''''FUNCTION'''', ''''PROCEDURE'''')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_functions_sql text := E'CREATE VIEW %I.ora_functions AS\n'
+      'SELECT schema,\n'
+      '       function_name,\n'
+      '       is_procedure,\n'
+      '       string_agg(line, TEXT '''' ORDER BY line_number) AS source\n'
+      'FROM %I.ora_func_src\n'
+      'GROUP BY schema, function_name, is_procedure';
 
 BEGIN
    /* ora_tables */
@@ -139,4 +178,14 @@ BEGIN
    /* ora_keys */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_keys', schema);
    EXECUTE format(ora_keys_sql, schema, server, max_viewdef);
+   /* ora_views */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_views', schema);
+   EXECUTE format(ora_views_sql, schema, server, max_viewdef);
+   /* ora_func_src and ora_functions */
+   EXECUTE format('DROP VIEW IF EXISTS %I.ora_functions', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_func_src', schema);
+   EXECUTE format(ora_func_src_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_functions_sql, schema, schema);
 END;$$;
+
+COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle remote tables for metadata';
