@@ -25,10 +25,16 @@ Prerequisites
 
   - `ALL_CONS_COLUMNS`
   - `ALL_CONSTRAINTS`
+  - `ALL_IND_COLUMNS`
+  - `ALL_IND_EXPRESSIONS`
+  - `ALL_INDEXES`
+  - `ALL_MVIEWS`
   - `ALL_PROCEDURES`
+  - `ALL_SEQUENCES`
   - `ALL_SOURCE`
   - `ALL_TAB_COLUMNS`
   - `ALL_TABLES`
+  - `ALL_USERS`
   - `ALL_VIEWS`
 
   You can choose to grant the use the `SELECT ANY DICTIONARY`
