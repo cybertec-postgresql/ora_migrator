@@ -20,20 +20,24 @@ $$DECLARE
          'WHERE temporary = ''''N''''\n'
          '  AND secondary = ''''N''''\n'
          '  AND nested    = ''''NO''''\n'
-         '  AND dropped   = ''''NO'''''
+         '  AND dropped   = ''''NO''''\n'
+         '  AND (owner, table_name)\n'
+         '     NOT IN (SELECT owner, mview_name\n'
+         '             FROM all_mviews)'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_columns_sql text := E'CREATE FOREIGN TABLE %I.ora_columns (\n'
-      '   schema      varchar(128) NOT NULL,\n'
-      '   table_name  varchar(128) NOT NULL,\n'
-      '   column_name varchar(128) NOT NULL,\n'
-      '   position    integer      NOT NULL,\n'
-      '   type_name   varchar(128) NOT NULL,\n'
-      '   type_schema varchar(128) NOT NULL,\n'
-      '   length      integer      NOT NULL,\n'
-      '   precision   integer,\n'
-      '   scale       integer,\n'
-      '   nullable    boolean      NOT NULL\n'
+      '   schema        varchar(128) NOT NULL,\n'
+      '   table_name    varchar(128) NOT NULL,\n'
+      '   column_name   varchar(128) NOT NULL,\n'
+      '   position      integer      NOT NULL,\n'
+      '   type_name     varchar(128) NOT NULL,\n'
+      '   type_schema   varchar(128) NOT NULL,\n'
+      '   length        integer      NOT NULL,\n'
+      '   precision     integer,\n'
+      '   scale         integer,\n'
+      '   nullable      boolean      NOT NULL,\n'
+      '   default_value text\n'
       ') SERVER %I OPTIONS (table ''('
          'SELECT owner,\n'
          '       table_name,\n'
@@ -44,7 +48,8 @@ $$DECLARE
          '       char_length,\n'
          '       data_precision,\n'
          '       data_scale,\n'
-         '       CASE WHEN nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable\n'
+         '       CASE WHEN nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable,\n'
+         '       data_default\n'
          'FROM all_tab_columns'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -162,6 +167,76 @@ $$DECLARE
       'FROM %I.ora_func_src\n'
       'GROUP BY schema, function_name, is_procedure';
 
+   ora_sequences_sql text := E'CREATE FOREIGN TABLE %I.ora_sequences (\n'
+      '   schema        varchar(128) NOT NULL,\n'
+      '   sequence_name varchar(128) NOT NULL,\n'
+      '   min_value     numeric(28),\n'
+      '   max_value     numeric(28),\n'
+      '   increment_by  numeric(28)  NOT NULL,\n'
+      '   cyclical      boolean      NOT NULL,\n'
+      '   cache_size    integer      NOT NULL,\n'
+      '   last_value    numeric(28)  NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT sequence_owner,\n'
+         '       sequence_name,\n'
+         '       min_value,\n'
+         '       max_value,\n'
+         '       increment_by,\n'
+         '       CASE WHEN cycle_flag = ''''Y'''' THEN 1 ELSE 0 END cyclical,\n'
+         '       cache_size,\n'
+         '       last_number\n'
+         'FROM all_sequences'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_index_exp_sql text := E'CREATE FOREIGN TABLE %I.ora_index_exp (\n'
+      '   schema         varchar(128) NOT NULL,\n'
+      '   table_name     varchar(128) NOT NULL,\n'
+      '   index_name     varchar(128) NOT NULL,\n'
+      '   uniqueness     boolean      NOT NULL,\n'
+      '   position       integer      NOT NULL,\n'
+      '   descend        boolean      NOT NULL,\n'
+      '   col_name       text         NOT NULL,\n'
+      '   col_expression text\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT ic.table_owner,\n'
+         '       ic.table_name,\n'
+         '       ic.index_name,\n'
+         '       CASE WHEN i.uniqueness = ''''UNIQUE'''' THEN 1 ELSE 0 END uniqueness,\n'
+         '       ic.column_position,\n'
+         '       CASE WHEN ic.descend = ''''DESC'''' THEN 1 ELSE 0 END descend,\n'
+         '       ic.column_name,\n'
+         '       ie.column_expression\n'
+         'FROM all_indexes i,\n'
+         '     all_ind_columns ic,\n'
+         '     all_ind_expressions ie\n'
+         'WHERE i.owner            = ic.index_owner\n'
+         '  AND i.index_name       = ic.index_name\n'
+         '  AND i.table_owner      = ic.table_owner\n'
+         '  AND i.table_name       = ic.table_name\n'
+         '  AND ic.index_owner     = ie.index_owner(+)\n'
+         '  AND ic.index_name      = ie.index_name(+)\n'
+         '  AND ic.table_owner     = ie.table_owner(+)\n'
+         '  AND ic.table_name      = ie.table_name(+)\n'
+         '  AND ic.column_position = ie.column_position(+)\n'
+         '  AND i.index_type NOT IN (''''LOB'''', ''''DOMAIN'''')\n'
+         '  AND NOT EXISTS (SELECT 1\n'
+         '                  FROM all_constraints c\n'
+         '                  WHERE c.owner = i.table_owner\n'
+         '                    AND c.table_name = i.table_name\n'
+         '                    AND COALESCE(c.index_owner, i.owner) = i.owner\n'
+         '                    AND c.index_name = i.index_name)'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_index_columns_sql text := E'CREATE VIEW %I.ora_index_columns AS\n'
+      'SELECT schema,\n'
+      '       table_name,\n'
+      '       index_name,\n'
+      '       uniqueness,\n'
+      '       position,\n'
+      '       descend,\n'
+      '       coalesce(col_expression, col_name) AS column_name\n'
+      'FROM %I.ora_index_exp\n';
+
 BEGIN
    /* ora_tables */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_tables', schema);
@@ -193,6 +268,17 @@ BEGIN
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_func_src IS ''source lines for Oracle functions and procedures on foreign server "%I"''', schema, server);
    EXECUTE format(ora_functions_sql, schema, schema);
    EXECUTE format('COMMENT ON VIEW %I.ora_functions IS ''Oracle functions and procedures on foreign server "%I"''', schema, server);
+   /* ora_sequences */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_sequences', schema);
+   EXECUTE format(ora_sequences_sql, schema, server, max_viewdef);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_sequences IS ''Oracle sequences on foreign server "%I"''', schema, server);
+   /* ora_index_exp and ora_index_columns */
+   EXECUTE format('DROP VIEW IF EXISTS %I.ora_index_columns', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_index_exp', schema);
+   EXECUTE format(ora_index_exp_sql, schema, server, max_viewdef);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_index_exp IS ''Oracle index columns on foreign server "%I"''', schema, server);
+   EXECUTE format(ora_index_columns_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.ora_index_columns IS ''Oracle index columns on foreign server "%I"''', schema, server);
 END;$$;
 
 COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle remote tables for metadata';

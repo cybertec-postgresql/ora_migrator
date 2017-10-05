@@ -69,19 +69,19 @@ Objects created by the extension
   - `max_viewdef` (default 32767): the maximal length of a view definition
     in Oracle.
 
-  Calling the function will create the following foreign tables:
+  Calling the function will create the following foreign tables and views:
 
   - `ora_checks`: Oracle ckeck constraints
   - `ora_columns`: columns of Oracle tables and views
   - `ora_foreign_keys`: columns of Oracle foreign key constraints
-  - `ora_func_src`: source lines of Oracle functions and procedures
+  - `ora_functions`: source code of Oracle functions and procedures
     (but not package or object definitions)
   - `ora_keys`: columns of Oracle primary and foreign keys
   - `ora_tables`: Oracle tables
   - `ora_views`: definition of Oracle views
-
-  Moreover, a view `ora_functions` will be created that shows
-  the source code of Oracle functions and procedures.
+  - `ora_sequences`: Oracle sequences
+  - `ora_index_columns`: columns of Oracle indexes that do *not* belong
+    to a constraint
 
 Usage
 =====
