@@ -4,12 +4,24 @@
 \echo Use "CREATE EXTENSION ora_migrator" to load this file. \quit
 
 CREATE FUNCTION create_oraviews (
-   server name,
-   schema name DEFAULT NAME 'public',
-   max_viewdef integer DEFAULT 32767
+   server      name,
+   schema      name    DEFAULT NAME 'public',
+   max_long integer DEFAULT 32767
 ) RETURNS void
    LANGUAGE plpgsql VOLATILE STRICT AS
 $$DECLARE
+   ora_sys_schemas text :=
+      E'''''ANONYMOUS'''', ''''APEX_PUBLIC_USER'''', ''''APEX_030200'''', ''''APPQOSSYS'''',\n'
+      '         ''''AURORA$JIS$UTILITY$'''', ''''AURORA$ORB$UNAUTHENTICATED'''', ''''BI'''',\n'
+      '         ''''CTXSYS'''', ''''DBSNMP'''', ''''DIP'''', ''''DMSYS'''', ''''EXFSYS'''',\n'
+      '         ''''HR'''', ''''IX'''', ''''LBACSYS'''', ''''MDDATA'''', ''''MDSYS'''', ''''MGMT_VIEW'''',\n'
+      '         ''''ODM'''', ''''ODM_MTR'''', ''''OE'''', ''''OLAPSYS'''', ''''ORACLE_OCM'''', ''''ORDDATA'''',\n'
+      '         ''''ORDPLUGINS'''', ''''ORDSYS'''', ''''OSE$HTTP$ADMIN'''', ''''OUTLN'''', ''''PM'''',\n'
+      '         ''''SCOTT'''', ''''SH'''', ''''SI_INFORMTN_SCHEMA'''', ''''SPATIAL_CSW_ADMIN_USR'''',\n'
+      '         ''''SPATIAL_WFS_ADMIN_USR'''', ''''SYS'''', ''''SYSMAN'''', ''''SYSTEM'''', ''''TRACESRV'''',\n'
+      '         ''''MTSSYS'''', ''''OASPUBLIC'''', ''''OLAPSYS'''', ''''OWBSYS'''', ''''OWBSYS_AUDIT'''',\n'
+      '         ''''WEBSYS'''', ''''WK_PROXY'''', ''''WKSYS'''', ''''WK_TEST'''', ''''WMSYS'''', ''''XDB''''';
+
    ora_tables_sql text := E'CREATE FOREIGN TABLE %I.ora_tables (\n'
       '   schema     varchar(128) NOT NULL,\n'
       '   table_name varchar(128) NOT NULL\n'
@@ -23,7 +35,8 @@ $$DECLARE
          '  AND dropped   = ''''NO''''\n'
          '  AND (owner, table_name)\n'
          '     NOT IN (SELECT owner, mview_name\n'
-         '             FROM all_mviews)'
+         '             FROM all_mviews)\n'
+         '  AND owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_columns_sql text := E'CREATE FOREIGN TABLE %I.ora_columns (\n'
@@ -50,7 +63,8 @@ $$DECLARE
          '       data_scale,\n'
          '       CASE WHEN nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable,\n'
          '       data_default\n'
-         'FROM all_tab_columns'
+         'FROM all_tab_columns\n'
+         'WHERE owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_checks_sql text := E'CREATE FOREIGN TABLE %I.ora_checks (\n'
@@ -71,7 +85,8 @@ $$DECLARE
          'WHERE constraint_type = ''''C''''\n'
          '  AND status          = ''''ENABLED''''\n'
          '  AND validated       = ''''VALIDATED''''\n'
-         '  AND invalid         IS NULL'
+         '  AND invalid         IS NULL\n'
+         '  AND owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_foreign_keys_sql text := E'CREATE FOREIGN TABLE %I.ora_foreign_keys (\n'
@@ -101,7 +116,8 @@ $$DECLARE
          '      ON (con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name)\n'
          '   JOIN all_cons_columns r_col\n'
          '      ON (con.r_owner = r_col.owner AND con.r_constraint_name = r_col.constraint_name)\n'
-         'WHERE con.constraint_type = ''''R'''''
+         'WHERE con.constraint_type = ''''R''''\n'
+         '  AND con.owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_keys_sql text := E'CREATE FOREIGN TABLE %I.ora_keys (\n'
@@ -125,7 +141,8 @@ $$DECLARE
          'FROM all_constraints con\n'
          '   JOIN all_cons_columns col\n'
          '      ON (con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name)\n'
-         'WHERE con.constraint_type IN (''''P'''', ''''U'''')'
+         'WHERE con.constraint_type IN (''''P'''', ''''U'''')\n'
+         '  AND con.owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_views_sql text := E'CREATE FOREIGN TABLE %I.ora_views (\n'
@@ -136,7 +153,8 @@ $$DECLARE
          'SELECT owner,\n'
          '       view_name,\n'
          '       text\n'
-         'FROM all_views'
+         'FROM all_views\n'
+         'WHERE owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_func_src_sql text := E'CREATE FOREIGN TABLE %I.ora_func_src (\n'
@@ -156,7 +174,8 @@ $$DECLARE
          '      ON pro.owner = src.owner\n'
          '         AND pro.object_name = src.name\n'
          '         AND pro.object_type = src.type\n'
-         'WHERE pro.object_type IN (''''FUNCTION'''', ''''PROCEDURE'''')'
+         'WHERE pro.object_type IN (''''FUNCTION'''', ''''PROCEDURE'''')\n'
+         '  AND pro.owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_functions_sql text := E'CREATE VIEW %I.ora_functions AS\n'
@@ -185,7 +204,8 @@ $$DECLARE
          '       CASE WHEN cycle_flag = ''''Y'''' THEN 1 ELSE 0 END cyclical,\n'
          '       cache_size,\n'
          '       last_number\n'
-         'FROM all_sequences'
+         'FROM all_sequences\n'
+         'WHERE sequence_owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_index_exp_sql text := E'CREATE FOREIGN TABLE %I.ora_index_exp (\n'
@@ -224,7 +244,8 @@ $$DECLARE
          '                  WHERE c.owner = i.table_owner\n'
          '                    AND c.table_name = i.table_name\n'
          '                    AND COALESCE(c.index_owner, i.owner) = i.owner\n'
-         '                    AND c.index_name = i.index_name)'
+         '                    AND c.index_name = i.index_name)\n'
+         '  AND ic.table_owner NOT IN (' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    ora_index_columns_sql text := E'CREATE VIEW %I.ora_index_columns AS\n'
@@ -237,48 +258,71 @@ $$DECLARE
       '       coalesce(col_expression, col_name) AS column_name\n'
       'FROM %I.ora_index_exp\n';
 
+   ora_schemas_sql text := E'CREATE FOREIGN TABLE %I.ora_schemas (\n'
+      '   schema varchar(128) NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT username\n'
+         'FROM all_users\n'
+         'WHERE username NOT IN( ' || ora_sys_schemas || E')\n'
+      ')'', max_long ''%s'', readonly ''true'')';
+
 BEGIN
    /* ora_tables */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_tables', schema);
-   EXECUTE format(ora_tables_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_tables_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_tables IS ''Oracle tables on foreign server "%I"''', schema, server);
    /* ora_columns */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_columns', schema);
-   EXECUTE format(ora_columns_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_columns_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_columns IS ''columns of Oracle tables and views on foreign server "%I"''', schema, server);
    /* ora_checks */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_checks', schema);
-   EXECUTE format(ora_checks_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_checks_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_checks IS ''Oracle check constraints on foreign server "%I"''', schema, server);
    /* ora_foreign_keys */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_foreign_keys', schema);
-   EXECUTE format(ora_foreign_keys_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_foreign_keys_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_foreign_keys IS ''Oracle foreign key columns on foreign server "%I"''', schema, server);
    /* ora_keys */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_keys', schema);
-   EXECUTE format(ora_keys_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_keys_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_keys IS ''Oracle primary and unique key columns on foreign server "%I"''', schema, server);
    /* ora_views */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_views', schema);
-   EXECUTE format(ora_views_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_views_sql, schema, server, max_long);
    /* ora_func_src and ora_functions */
    EXECUTE format('DROP VIEW IF EXISTS %I.ora_functions', schema);
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_func_src', schema);
-   EXECUTE format(ora_func_src_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_func_src_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_func_src IS ''source lines for Oracle functions and procedures on foreign server "%I"''', schema, server);
    EXECUTE format(ora_functions_sql, schema, schema);
    EXECUTE format('COMMENT ON VIEW %I.ora_functions IS ''Oracle functions and procedures on foreign server "%I"''', schema, server);
    /* ora_sequences */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_sequences', schema);
-   EXECUTE format(ora_sequences_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_sequences_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_sequences IS ''Oracle sequences on foreign server "%I"''', schema, server);
    /* ora_index_exp and ora_index_columns */
    EXECUTE format('DROP VIEW IF EXISTS %I.ora_index_columns', schema);
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_index_exp', schema);
-   EXECUTE format(ora_index_exp_sql, schema, server, max_viewdef);
+   EXECUTE format(ora_index_exp_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_index_exp IS ''Oracle index columns on foreign server "%I"''', schema, server);
    EXECUTE format(ora_index_columns_sql, schema, schema);
    EXECUTE format('COMMENT ON VIEW %I.ora_index_columns IS ''Oracle index columns on foreign server "%I"''', schema, server);
+   /* ora_schemas */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_schemas', schema);
+   EXECUTE format(ora_schemas_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_schemas IS ''Oracle schemas on foreign server "%I"''', schema, server);
 END;$$;
 
-COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle remote tables for metadata';
+COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle foreign tables for the metadata of a foreign server';
+
+CREATE FUNCTION migrate_oracle(
+   server      name,
+   schemas     name[]  DEFAULT NULL,
+   max_long    integer DEFAULT 32767
+) RETURNS void
+   LANGUAGE plpgsql VOLATILE STRICT AS
+$$BEGIN
+END;$$;
+
+COMMENT ON FUNCTION migrate_oracle(name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';

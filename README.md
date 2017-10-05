@@ -71,6 +71,7 @@ Objects created by the extension
 
   Calling the function will create the following foreign tables and views:
 
+  - `oracle_schemas`: Oracle schemas
   - `ora_checks`: Oracle ckeck constraints
   - `ora_columns`: columns of Oracle tables and views
   - `ora_foreign_keys`: columns of Oracle foreign key constraints
@@ -82,6 +83,8 @@ Objects created by the extension
   - `ora_sequences`: Oracle sequences
   - `ora_index_columns`: columns of Oracle indexes that do *not* belong
     to a constraint
+
+Objects in Oracle system schemas will not be shown.
 
 Usage
 =====
@@ -99,7 +102,7 @@ You can query the foreign tables with additional conditions, e.g.
     ORDER BY table_name, position;
 
 Conditions will be pushed down to Oracle whenever that is possible
-for oracle_fdw,so the queries should be efficient.
+for oracle_fdw, so the queries should be efficient.
 
 ALl Oracle object names will appear like they are in Oracle, which is
 usually in upper case.
