@@ -53,9 +53,11 @@ optional `SCHEMA` clause of `CREATE EXTENSION`).
 Objects created by the extension
 ================================
 
-- Function `create_oraviews`.
+- Function `create_oraviews`:
 
-  This function takes the following arguments:
+  This function creates a number of foreign tables and views for
+  Oracle metadata.  
+  It takes the following parameters:
 
   - `server`: the name of the Oracle foreign server for which the
     foreign tables will be created.  
@@ -66,8 +68,8 @@ Objects created by the extension
     The schema must exist, and you must have the `CREATE` privilege
     on it.
 
-  - `max_viewdef` (default 32767): the maximal length of a view definition
-    in Oracle.
+  - `max_long` (default 32767): the maximal length of view definitions,
+    `DEFAULT` and index expressions in Oracle.
 
   Calling the function will create the following foreign tables and views:
 
@@ -84,7 +86,47 @@ Objects created by the extension
   - `ora_index_columns`: columns of Oracle indexes that do *not* belong
     to a constraint
 
-Objects in Oracle system schemas will not be shown.
+  Objects in Oracle system schemas will not be shown.
+
+- Function `oracle_migrate`:
+
+  Performs a migration from an Oracle foreign server to PostgreSQL.
+  The parameters are:
+
+  - `server`: the name of the Oracle foreign server which will be migrated
+    to PostgreSQL.  
+    You must have the `USAGE` privilege on that server.
+
+  - `staging_schema` (default `ora_staging`): the name of a schema that
+    will be created for temporary objects used during the migration
+    (specifically, the objects created by `create_oraviews`).
+
+  - `schemas` (default NULL): if not NULL, an array of Oracle schema names
+    that should be migrated to PostgreSQL.  
+    The names must be as they appear in Oracle, that is usually in upper case.
+
+  - `max_long` (default 32767): the maximal length of view definitions,
+    `DEFAULT` and index expressions in Oracle.
+
+  You need permissions to create schemas in the PostgreSQL database
+  to use this function.
+
+- Function `oracle_migrate_prepare`:
+
+  Performs the first step of `oracle_migrate`.
+
+  The parameters are the same as for `oracle_migrate`.
+
+  Steps performed:
+
+  - Create the staging schema.
+
+  - Call `create_oraviews` to create the metadata views there.
+
+  - Create all the destination schemas for the migration.
+
+  - Use `IMPORT FOREIGN SCHEMA` to create foreign tables in the
+    destination schemas.
 
 Usage
 =====

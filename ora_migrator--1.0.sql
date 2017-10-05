@@ -8,7 +8,7 @@ CREATE FUNCTION create_oraviews (
    schema      name    DEFAULT NAME 'public',
    max_long integer DEFAULT 32767
 ) RETURNS void
-   LANGUAGE plpgsql VOLATILE STRICT AS
+   LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
 $$DECLARE
    ora_sys_schemas text :=
       E'''''ANONYMOUS'''', ''''APEX_PUBLIC_USER'''', ''''APEX_030200'''', ''''APPQOSSYS'''',\n'
@@ -316,13 +316,87 @@ END;$$;
 
 COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle foreign tables for the metadata of a foreign server';
 
-CREATE FUNCTION migrate_oracle(
-   server      name,
-   schemas     name[]  DEFAULT NULL,
-   max_long    integer DEFAULT 32767
+CREATE FUNCTION oracle_tolower(text) RETURNS text
+   LANGUAGE sql STABLE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+'SELECT CASE WHEN $1 = upper($1) THEN lower($1) ELSE $1 END';
+
+COMMENT ON FUNCTION oracle_tolower(text) IS 'helper function to fold Oracle names to lower case';
+
+CREATE FUNCTION oracle_migrate_prepare(
+   server         name,
+   staging_schema name    DEFAULT NAME 'ora_staging',
+   schemas        name[]  DEFAULT NULL,
+   max_long       integer DEFAULT 32767
 ) RETURNS void
-   LANGUAGE plpgsql VOLATILE STRICT AS
-$$BEGIN
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   s         name;
+   extschema name;
+BEGIN
+   /* set "search_path" to the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+
+   /* create staging schema */
+   BEGIN
+      EXECUTE format('CREATE SCHEMA %I', staging_schema);
+   EXCEPTION
+      WHEN insufficient_privilege THEN
+         RAISE insufficient_privilege USING
+            MESSAGE = 'you do not have permission to create a schema in this database';
+      WHEN duplicate_schema THEN
+         RAISE duplicate_schema USING
+            MESSAGE = 'staging schema "' || staging_schema || '" already exists',
+            HINT = 'Drop the staging schema first or use a different one.';
+   END;
+
+   /* create the migration views in the staging schema */
+   PERFORM create_oraviews(server, staging_schema, max_long);
+
+   /* set "search_path" to the staging schema and the extension schema */
+   EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
+
+   /* loop through the schemas that should be migrated */
+   FOR s IN
+      SELECT schema FROM ora_schemas
+      WHERE schemas IS NULL
+         OR NOT schema =ANY (schemas)
+   LOOP
+      RAISE NOTICE 'Processing schema "%"...', s;
+
+      /* create schema */
+      EXECUTE format('CREATE SCHEMA %I', oracle_tolower(s));
+
+      /* loop through all tables in the schema */
+   END LOOP;
 END;$$;
 
-COMMENT ON FUNCTION migrate_oracle(name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';
+COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name[], integer) IS 'first step of "oracle_migrate": create schemas and foreign table definitions';
+
+CREATE FUNCTION oracle_migrate(
+   server         name,
+   staging_schema name    DEFAULT NAME 'ora_staging',
+   schemas        name[]  DEFAULT NULL,
+   max_long       integer DEFAULT 32767
+) RETURNS void
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema name;
+BEGIN
+   /* set "search_path" to the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+
+   /*
+    * First step:
+    * Create staging schema and define the oracle metadata views there.
+    * Create the destination schemas and the foreign tables there.
+    */
+   PERFORM oracle_migrate_prepare(server, staging_schema, schemas, max_long);
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate(name, name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';
