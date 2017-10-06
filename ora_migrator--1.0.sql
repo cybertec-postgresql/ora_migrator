@@ -95,6 +95,7 @@ $$DECLARE
       '   constraint_name varchar(128) NOT NULL,\n'
       '   "deferrable"    boolean      NOT NULL,\n'
       '   deferred        boolean      NOT NULL,\n'
+      '   delete_rule     text         NOT NULL,\n'
       '   column_name     varchar(128) NOT NULL,\n'
       '   position        integer      NOT NULL,\n'
       '   remote_schema   varchar(128) NOT NULL,\n'
@@ -104,8 +105,9 @@ $$DECLARE
          'SELECT con.owner,\n'
          '       con.table_name,\n'
          '       con.constraint_name,\n'
-         '       CASE WHEN deferrable = ''''DEFERRABLE'''' THEN 1 ELSE 0 END deferrable,\n'
-         '       CASE WHEN deferred   = ''''DEFERRED''''   THEN 1 ELSE 0 END deferred,\n'
+         '       CASE WHEN con.deferrable = ''''DEFERRABLE'''' THEN 1 ELSE 0 END deferrable,\n'
+         '       CASE WHEN con.deferred   = ''''DEFERRED''''   THEN 1 ELSE 0 END deferred,\n'
+         '       con.delete_rule,\n'
          '       col.column_name,\n'
          '       col.position,\n'
          '       r_col.owner AS remote_schema,\n'
@@ -398,7 +400,7 @@ BEGIN
    FOR s IN
       SELECT schema FROM ora_schemas
       WHERE schemas IS NULL
-         OR NOT schema =ANY (schemas)
+         OR schema =ANY (schemas)
    LOOP
       RAISE NOTICE 'Creating foreign tables for schema "%"...', s;
 
@@ -439,7 +441,7 @@ BEGIN
    FOR s IN
       SELECT schema FROM ora_schemas
       WHERE schemas IS NULL
-         OR NOT schema =ANY (schemas)
+         OR schema =ANY (schemas)
    LOOP
       /* loop through all external tables in that schema */
       FOR t IN
@@ -462,13 +464,110 @@ CREATE FUNCTION oracle_migrate_constraints(
 ) RETURNS void
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
-   extschema name;
+   extschema   name;
+   stmt        text;
+   stmt_middle text;
+   stmt_suffix text;
+   separator   text;
+   old_s       name;
+   old_t       name;
+   old_c       name;
+   loc_s       name;
+   loc_t       name;
+   cons_name   name;
+   candefer    boolean;
+   is_deferred boolean;
+   delrule     text;
+   colname     name;
+   colpos      integer;
+   rem_s       name;
+   rem_t       name;
+   rem_colname name;
+   prim        boolean;
 BEGIN
    /* set "search_path" to the staging schema and the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
+
+   /* loop through all key constraint columns */
+   old_s := '';
+   old_t := '';
+   old_c := '';
+   FOR loc_s, loc_t, cons_name, candefer, is_deferred, colname, colpos, prim IN
+      SELECT schema, table_name, constraint_name, "deferrable", deferred,
+             column_name, position, is_primary
+      FROM ora_keys
+      WHERE schemas IS NULL
+         OR schema =ANY (schemas)
+      ORDER BY schema, table_name, constraint_name, position
+   LOOP
+      IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
+         IF old_t <> '' THEN
+            EXECUTE stmt || stmt_suffix;
+         END IF;
+
+         stmt := format('ALTER TABLE %I.%I ADD %s (',
+                        oracle_tolower(loc_s), oracle_tolower(loc_t),
+                        CASE WHEN prim THEN 'PRIMARY KEY' ELSE 'UNIQUE' END);
+         stmt_suffix := format(')%s DEFERRABLE INITIALLY %s',
+                              CASE WHEN candefer THEN '' ELSE ' NOT' END,
+                              CASE WHEN is_deferred THEN 'DEFERRED' ELSE 'IMMEDIATE' END);
+         old_s := loc_s;
+         old_t := loc_t;
+         old_c := cons_name;
+         separator := '';
+      END IF;
+
+      stmt := stmt || separator || format('%I', oracle_tolower(colname));
+      separator := ', ';
+   END LOOP;
+
+   IF old_t <> '' THEN
+      EXECUTE stmt || stmt_suffix;
+   END IF;
+
+   /* loop through all foreign key constraints */
+   old_s := '';
+   old_t := '';
+   old_c := '';
+   FOR loc_s, loc_t, cons_name, candefer, is_deferred, delrule,
+       colname, colpos, rem_s, rem_t, rem_colname IN
+      SELECT schema, table_name, constraint_name, "deferrable", deferred, delete_rule,
+             column_name, position, remote_schema, remote_table, remote_column
+         FROM ora_foreign_keys
+      WHERE schemas IS NULL
+         OR schema =ANY (schemas)
+            AND remote_schema =ANY (schemas)
+      ORDER BY schema, table_name, constraint_name, position
+   LOOP
+      IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
+         IF old_t <> '' THEN
+            EXECUTE stmt || stmt_middle || stmt_suffix;
+         END IF;
+
+         stmt := format('ALTER TABLE %I.%I ADD FOREIGN KEY (',
+                        oracle_tolower(loc_s), oracle_tolower(loc_t));
+         stmt_middle := format(') REFERENCES %I.%I (',
+                               oracle_tolower(rem_s), oracle_tolower(rem_t));
+         stmt_suffix := format(')%s DEFERRABLE INITIALLY %s',
+                              CASE WHEN candefer THEN '' ELSE ' NOT' END,
+                              CASE WHEN is_deferred THEN 'DEFERRED' ELSE 'IMMEDIATE' END);
+         old_s := loc_s;
+         old_t := loc_t;
+         old_c := cons_name;
+         separator := '';
+      END IF;
+
+      stmt := stmt || separator || format('%I', oracle_tolower(colname));
+      stmt_middle := stmt_middle || separator || format('%I', oracle_tolower(rem_colname));
+      separator := ', ';
+   END LOOP;
+
+   IF old_t <> '' THEN
+      EXECUTE stmt || stmt_middle || stmt_suffix;
+   END IF;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'third step of "oracle_migrate": create constraints and indexes';
