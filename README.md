@@ -3,8 +3,10 @@ Oracle to PostgreSQL migration tools
 
 ora_migrator is a PostgreSQL extension that uses
 [oracle_fdw](http://laurenz.github.io/oracle_fdw/)
-to create foreign tables that allow you to extract object metadata
-from an Oracle database.
+to migrate an Oracle database to PostgreSQL.
+
+In addition to that, it provides foreign tables and views that allow
+convenient access to Oracle metadata from PostgreSQL.
 
 Prerequisites
 =============
@@ -59,6 +61,97 @@ optional `SCHEMA` clause of `CREATE EXTENSION`).
 Objects created by the extension
 ================================
 
+- Function `oracle_migrate`:
+
+  Performs a migration from an Oracle foreign server to PostgreSQL.
+
+  The parameters are:
+
+  - `server`: the name of the Oracle foreign server which will be migrated
+    to PostgreSQL.  
+    You must have the `USAGE` privilege on that server.
+
+  - `staging_schema` (default `ora_staging`): the name of a schema that
+    will be created for temporary objects used during the migration
+    (specifically, the objects created by `create_oraviews`).
+
+  - `schemas` (default NULL): an array of Oracle schema names
+    that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
+    system schemas are processed.  
+    The names must be as they appear in Oracle, which is usually in upper case.
+
+  - `max_long` (default 32767): the maximal length of view definitions,
+    `DEFAULT` and index expressions in Oracle.
+
+  You need permissions to create schemas in the PostgreSQL database
+  to use this function.
+
+- Function `oracle_migrate_prepare`:
+
+  Performs the first step of `oracle_migrate`.
+
+  The parameters are the same as for `oracle_migrate`.
+
+  Steps performed:
+
+  - Create the staging schema.
+
+  - Call `create_oraviews` to create the metadata views there.
+
+  - Create all the destination schemas for the migration.
+
+  - Use `IMPORT FOREIGN SCHEMA` to create foreign tables in the
+    destination schemas.
+
+- Function `oracle_materialize`:
+
+  Replaces a foreign table with a real table.
+
+  The parameters are:
+
+  - `s`: name of the PostgreSQL schema where the foreign table is.
+
+  - `t`: name of a foreign table.
+
+- Function `oracle_migrate_tables`:
+
+  Calls `oracle_materialize` for all foreign tables in a migrated schemas
+  to replace them with real tables.
+
+  The parameters are:
+
+  - `staging_schema` (default `ora_staging`): the name of the staging
+    schema created by `oracle_migrate_prepare`.
+
+  - `schemas` (default NULL): an array of Oracle schema names
+    that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
+    system schemas are processed.  
+    The names must be as they appear in Oracle, which is usually in upper case.
+
+- Function `oracle_migrate_constraints`:
+
+  Creates constraints and indexes on all tables migrated from Oracle with
+  `oracle_migrate_tables`.
+
+  The parameters are:
+
+  - `staging_schema` (default `ora_staging`): the name of the staging
+    schema created by `oracle_migrate_prepare`.
+
+  - `schemas` (default NULL): an array of Oracle schema names
+    that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
+    system schemas are processed.  
+    The names must be as they appear in Oracle, which is usually in upper case.
+
+- Function `oracle_migrate_finish`:
+
+  Drops the staging schema.
+
+  Parameter:
+
+  - `staging_schema` (default `ora_staging`): the name of the staging
+    schema created by `oracle_migrate_prepare`.
+
 - Function `create_oraviews`:
 
   This function creates a number of foreign tables and views for
@@ -93,46 +186,6 @@ Objects created by the extension
     to a constraint
 
   Objects in Oracle system schemas will not be shown.
-
-- Function `oracle_migrate`:
-
-  Performs a migration from an Oracle foreign server to PostgreSQL.
-  The parameters are:
-
-  - `server`: the name of the Oracle foreign server which will be migrated
-    to PostgreSQL.  
-    You must have the `USAGE` privilege on that server.
-
-  - `staging_schema` (default `ora_staging`): the name of a schema that
-    will be created for temporary objects used during the migration
-    (specifically, the objects created by `create_oraviews`).
-
-  - `schemas` (default NULL): if not NULL, an array of Oracle schema names
-    that should be migrated to PostgreSQL.  
-    The names must be as they appear in Oracle, that is usually in upper case.
-
-  - `max_long` (default 32767): the maximal length of view definitions,
-    `DEFAULT` and index expressions in Oracle.
-
-  You need permissions to create schemas in the PostgreSQL database
-  to use this function.
-
-- Function `oracle_migrate_prepare`:
-
-  Performs the first step of `oracle_migrate`.
-
-  The parameters are the same as for `oracle_migrate`.
-
-  Steps performed:
-
-  - Create the staging schema.
-
-  - Call `create_oraviews` to create the metadata views there.
-
-  - Create all the destination schemas for the migration.
-
-  - Use `IMPORT FOREIGN SCHEMA` to create foreign tables in the
-    destination schemas.
 
 Usage
 =====

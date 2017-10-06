@@ -255,7 +255,7 @@ $$DECLARE
       '       uniqueness,\n'
       '       position,\n'
       '       descend,\n'
-      '       coalesce(col_expression, col_name) AS column_name\n'
+      '       coalesce(''('' || col_expression || '')'', col_name) AS column_name\n'
       'FROM %I.ora_index_exp\n';
 
    ora_schemas_sql text := E'CREATE FOREIGN TABLE %I.ora_schemas (\n'
@@ -322,6 +322,28 @@ CREATE FUNCTION oracle_tolower(text) RETURNS text
 
 COMMENT ON FUNCTION oracle_tolower(text) IS 'helper function to fold Oracle names to lower case';
 
+CREATE FUNCTION oracle_materialize(
+   s name,
+   t name
+) RETURNS void
+   LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   ft name;
+BEGIN
+   /* rename the foreign table */
+   ft := t || E'\x07';
+   EXECUTE format('ALTER FOREIGN TABLE %I.%I RENAME TO %I', s, t, ft);
+
+   /* create a table and fill it */
+   EXECUTE format('CREATE TABLE %I.%I (LIKE %I.%I)', s, t, s, ft);
+   EXECUTE format('INSERT INTO %I.%I SELECT * FROM %I.%I', s, t, s, ft);
+
+   /* drop the foreign table */
+   EXECUTE format('DROP FOREIGN TABLE %I.%I', s, ft);
+END;$$;
+
+COMMENT ON FUNCTION oracle_materialize(name, name) IS 'turn an Oracle foreign table into a PostgreSQL table';
+
 CREATE FUNCTION oracle_migrate_prepare(
    server         name,
    staging_schema name    DEFAULT NAME 'ora_staging',
@@ -332,7 +354,21 @@ CREATE FUNCTION oracle_migrate_prepare(
 $$DECLARE
    s         name;
    extschema name;
+   tablist   text;
 BEGIN
+   /* test if the foreign server can be used */
+   BEGIN
+      SELECT extnamespace::regnamespace INTO extschema
+         FROM pg_catalog.pg_extension
+         WHERE extname = 'ora_migrator';
+      EXECUTE format('SET LOCAL search_path = %I', extschema);
+      PERFORM oracle_diag(server);
+   EXCEPTION
+      WHEN OTHERS THEN
+         RAISE WARNING 'Cannot establish connection with foreign server "%"', server;
+         RAISE;
+   END;
+
    /* set "search_path" to the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
       FROM pg_catalog.pg_extension
@@ -364,16 +400,88 @@ BEGIN
       WHERE schemas IS NULL
          OR NOT schema =ANY (schemas)
    LOOP
-      RAISE NOTICE 'Processing schema "%"...', s;
+      RAISE NOTICE 'Creating foreign tables for schema "%"...', s;
 
       /* create schema */
       EXECUTE format('CREATE SCHEMA %I', oracle_tolower(s));
 
-      /* loop through all tables in the schema */
+      /* get a list of tables in the schema */
+      SELECT string_agg(format('%I', oracle_tolower(table_name)), ', ') INTO tablist
+         FROM ora_tables
+         WHERE schema = s;
+
+      CONTINUE WHEN tablist IS NULL;
+
+      /* create foreign tables for all these tables */
+      EXECUTE format('IMPORT FOREIGN SCHEMA %I LIMIT TO (%s) FROM SERVER %I INTO %I', s, tablist, server, oracle_tolower(s));
    END LOOP;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name[], integer) IS 'first step of "oracle_migrate": create schemas and foreign table definitions';
+
+CREATE FUNCTION oracle_migrate_tables(
+   staging_schema name    DEFAULT NAME 'ora_staging',
+   schemas        name[]  DEFAULT NULL
+) RETURNS void
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema name;
+   s         name;
+   t         name;
+BEGIN
+   /* set "search_path" to the staging schema and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
+
+   /* loop through the schemas that should be migrated */
+   FOR s IN
+      SELECT schema FROM ora_schemas
+      WHERE schemas IS NULL
+         OR NOT schema =ANY (schemas)
+   LOOP
+      /* loop through all external tables in that schema */
+      FOR t IN
+         SELECT relname
+         FROM pg_catalog.pg_class
+         WHERE relnamespace = format('%I', oracle_tolower(s))::regnamespace
+           AND relkind = 'f'
+      LOOP
+         /* turn that foreign table into a real table */
+         PERFORM oracle_materialize(oracle_tolower(s), t);
+      END LOOP;
+   END LOOP;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_tables(name, name[]) IS 'second step of "oracle_migrate": copy tables from Oracle';
+
+CREATE FUNCTION oracle_migrate_constraints(
+   staging_schema name    DEFAULT NAME 'ora_staging',
+   schemas        name[]  DEFAULT NULL
+) RETURNS void
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema name;
+BEGIN
+   /* set "search_path" to the staging schema and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'third step of "oracle_migrate": create constraints and indexes';
+
+CREATE FUNCTION oracle_migrate_finish(
+   staging_schema name    DEFAULT NAME 'ora_staging'
+) RETURNS void
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$BEGIN
+   EXECUTE format('DROP SCHEMA %I CASCADE', staging_schema);
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_finish(name) IS 'final step of "oracle_migrate": drop staging schema';
 
 CREATE FUNCTION oracle_migrate(
    server         name,
@@ -397,6 +505,24 @@ BEGIN
     * Create the destination schemas and the foreign tables there.
     */
    PERFORM oracle_migrate_prepare(server, staging_schema, schemas, max_long);
+
+   /*
+    * Second step:
+    * Copy the tables over from Oracle.
+    */
+   PERFORM oracle_migrate_tables(staging_schema, schemas);
+
+   /*
+    * Third step:
+    * Create constraints and indexes.
+    */
+   PERFORM oracle_migrate_constraints(staging_schema, schemas);
+
+   /*
+    * Second step:
+    * Copy the tables over from Oracle.
+    */
+   PERFORM oracle_migrate_finish(staging_schema);
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate(name, name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';
