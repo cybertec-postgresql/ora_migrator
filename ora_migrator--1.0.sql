@@ -10,6 +10,8 @@ CREATE FUNCTION create_oraviews (
 ) RETURNS void
    LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
 $$DECLARE
+   old_msglevel text;
+
    ora_sys_schemas text :=
       E'''''ANONYMOUS'''', ''''APEX_PUBLIC_USER'''', ''''APEX_030200'''', ''''APPQOSSYS'''',\n'
       '         ''''AURORA$JIS$UTILITY$'''', ''''AURORA$ORB$UNAUTHENTICATED'''', ''''BI'''',\n'
@@ -269,6 +271,11 @@ $$DECLARE
       ')'', max_long ''%s'', readonly ''true'')';
 
 BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
    /* ora_tables */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_tables', schema);
    EXECUTE format(ora_tables_sql, schema, server, max_long);
@@ -314,6 +321,9 @@ BEGIN
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_schemas', schema);
    EXECUTE format(ora_schemas_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_schemas IS ''Oracle schemas on foreign server "%I"''', schema, server);
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 END;$$;
 
 COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle foreign tables for the metadata of a foreign server';
@@ -323,6 +333,15 @@ CREATE FUNCTION oracle_tolower(text) RETURNS text
 'SELECT CASE WHEN $1 = upper($1) THEN lower($1) ELSE $1 END';
 
 COMMENT ON FUNCTION oracle_tolower(text) IS 'helper function to fold Oracle names to lower case';
+
+CREATE FUNCTION adjust_to_bigint(numeric) RETURNS bigint
+   LANGUAGE sql STABLE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$SELECT CASE WHEN $1 < -9223372036854775808
+              THEN BIGINT '-9223372036854775808'
+              WHEN $1 > 9223372036854775807
+              THEN BIGINT '9223372036854775807'
+              ELSE $1::bigint
+         END$$;
 
 CREATE FUNCTION oracle_materialize(
    s name,
@@ -354,15 +373,29 @@ CREATE FUNCTION oracle_migrate_prepare(
 ) RETURNS void
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
-   s         name;
-   extschema name;
-   tablist   text;
+   s            name;
+   extschema    name;
+   tablist      text;
+   sch          name;
+   seq          name;
+   minv         numeric;
+   maxv         numeric;
+   incr         numeric;
+   cycl         boolean;
+   cachesiz     integer;
+   lastval      numeric;
+   old_msglevel text;
 BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
    /* test if the foreign server can be used */
    BEGIN
       SELECT extnamespace::regnamespace INTO extschema
          FROM pg_catalog.pg_extension
-         WHERE extname = 'ora_migrator';
+         WHERE extname = 'oracle_fdw';
       EXECUTE format('SET LOCAL search_path = %I', extschema);
       PERFORM oracle_diag(server);
    EXCEPTION
@@ -376,6 +409,10 @@ BEGIN
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I', extschema);
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating staging schema ...';
+   SET LOCAL client_min_messages = warning;
 
    /* create staging schema */
    BEGIN
@@ -402,7 +439,9 @@ BEGIN
       WHERE schemas IS NULL
          OR schema =ANY (schemas)
    LOOP
+      EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
       RAISE NOTICE 'Creating foreign tables for schema "%"...', s;
+      SET LOCAL client_min_messages = warning;
 
       /* create schema */
       EXECUTE format('CREATE SCHEMA %I', oracle_tolower(s));
@@ -417,6 +456,26 @@ BEGIN
       /* create foreign tables for all these tables */
       EXECUTE format('IMPORT FOREIGN SCHEMA %I LIMIT TO (%s) FROM SERVER %I INTO %I', s, tablist, server, oracle_tolower(s));
    END LOOP;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating sequences ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all sequences */
+   FOR sch, seq, minv, maxv, incr, cycl, cachesiz, lastval IN
+      SELECT schema, sequence_name, min_value, max_value, increment_by, cyclical, cache_size, last_value
+         FROM ora_sequences
+      WHERE schemas IS NULL
+         OR schema =ANY (schemas)
+   LOOP
+      EXECUTE format('CREATE SEQUENCE %I.%I INCREMENT %s MINVALUE %s MAXVALUE %s START %s CACHE %s %sCYCLE',
+                     oracle_tolower(sch), oracle_tolower(seq), adjust_to_bigint(incr), adjust_to_bigint(minv),
+                     adjust_to_bigint(maxv), adjust_to_bigint(lastval + 1), cachesiz,
+                     CASE WHEN cycl THEN '' ELSE 'NO ' END);
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name[], integer) IS 'first step of "oracle_migrate": create schemas and foreign table definitions';
@@ -427,10 +486,16 @@ CREATE FUNCTION oracle_migrate_tables(
 ) RETURNS void
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
-   extschema name;
-   s         name;
-   t         name;
+   extschema    name;
+   s            name;
+   t            name;
+   old_msglevel text;
 BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
    /* set "search_path" to the staging schema and the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
       FROM pg_catalog.pg_extension
@@ -450,10 +515,17 @@ BEGIN
          WHERE relnamespace = format('%I', oracle_tolower(s))::regnamespace
            AND relkind = 'f'
       LOOP
+         EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+         RAISE NOTICE 'Migrating table "%"."%" ...', oracle_tolower(s), t;
+         SET LOCAL client_min_messages = warning;
+
          /* turn that foreign table into a real table */
          PERFORM oracle_materialize(oracle_tolower(s), t);
       END LOOP;
    END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_tables(name, name[]) IS 'second step of "oracle_migrate": copy tables from Oracle';
@@ -464,32 +536,47 @@ CREATE FUNCTION oracle_migrate_constraints(
 ) RETURNS void
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
-   extschema   name;
-   stmt        text;
-   stmt_middle text;
-   stmt_suffix text;
-   separator   text;
-   old_s       name;
-   old_t       name;
-   old_c       name;
-   loc_s       name;
-   loc_t       name;
-   cons_name   name;
-   candefer    boolean;
-   is_deferred boolean;
-   delrule     text;
-   colname     name;
-   colpos      integer;
-   rem_s       name;
-   rem_t       name;
-   rem_colname name;
-   prim        boolean;
+   extschema    name;
+   stmt         text;
+   stmt_middle  text;
+   stmt_suffix  text;
+   separator    text;
+   old_s        name;
+   old_t        name;
+   old_c        name;
+   loc_s        name;
+   loc_t        name;
+   ind_name     name;
+   cons_name    name;
+   candefer     boolean;
+   is_deferred  boolean;
+   delrule      text;
+   colname      name;
+   colpos       integer;
+   rem_s        name;
+   rem_t        name;
+   rem_colname  name;
+   prim         boolean;
+   expr         text;
+   uniq         boolean;
+   des          boolean;
+   errmsg       text;
+   old_msglevel text;
 BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
    /* set "search_path" to the staging schema and the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating UNIQUE and PRIMARY KEY constraints ...';
+   SET LOCAL client_min_messages = warning;
 
    /* loop through all key constraint columns */
    old_s := '';
@@ -528,7 +615,11 @@ BEGIN
       EXECUTE stmt || stmt_suffix;
    END IF;
 
-   /* loop through all foreign key constraints */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating FOREIGN KEY constraints ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all foreign key constraint columns */
    old_s := '';
    old_t := '';
    old_c := '';
@@ -568,6 +659,99 @@ BEGIN
    IF old_t <> '' THEN
       EXECUTE stmt || stmt_middle || stmt_suffix;
    END IF;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating CHECK constraints ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all check constraints except NOT NULL checks */
+   FOR loc_s, loc_t, cons_name, candefer, is_deferred, expr IN
+      SELECT schema, table_name, constraint_name, "deferrable", deferred, condition
+         FROM ora_checks
+      WHERE (schemas IS NULL
+         OR schema =ANY (schemas))
+        AND condition !~ e'^"[^"]*" IS NOT NULL$'
+   LOOP
+      /* catch exceptions because the expression might be untranslatable */
+      BEGIN
+         EXECUTE format('ALTER TABLE %I.%I ADD CHECK(%s)',
+                       oracle_tolower(loc_s), oracle_tolower(loc_t), oracle_tolower(expr));
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT;
+            RAISE WARNING 'Error creating CHECK constraint on table %.% with expression "%"',
+                          oracle_tolower(loc_s), oracle_tolower(loc_t), oracle_tolower(expr)
+               USING DETAIL = errmsg;
+      END;
+   END LOOP;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating indexes ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all index columns */
+   old_s := '';
+   old_t := '';
+   old_c := '';
+   FOR loc_s, loc_t, ind_name, uniq, colpos, des, expr IN
+      SELECT schema, table_name, index_name, uniqueness, position, descend, column_name
+         FROM ora_index_columns
+      WHERE schemas IS NULL
+         OR schema =ANY (schemas)
+      ORDER BY schema, table_name, index_name, position
+   LOOP
+      IF old_s <> loc_s OR old_t <> loc_t OR old_c <> ind_name THEN
+         IF old_t <> '' THEN
+            /* catch exceptions because the expression might be untranslatable */
+            BEGIN
+               EXECUTE stmt || ')';
+            EXCEPTION
+               WHEN others THEN
+                  /* turn the error into a warning */
+                  GET STACKED DIAGNOSTICS
+                     errmsg := MESSAGE_TEXT;
+                  RAISE WARNING 'Error executing "%"', stmt || ')'
+                     USING DETAIL = errmsg;
+            END;
+         END IF;
+
+         stmt := format('CREATE %sINDEX ON %I.%I (',
+                        CASE WHEN uniq THEN 'UNIQUE ' ELSE '' END,
+                        oracle_tolower(loc_s), oracle_tolower(loc_t));
+         old_s := loc_s;
+         old_t := loc_t;
+         old_c := ind_name;
+         separator := '';
+      END IF;
+
+      /* fold expressions to lower case */
+      stmt := stmt || separator
+                   || CASE WHEN substring(expr FROM 1 FOR 1) = '('
+                           THEN lower(expr)
+                           ELSE quote_ident(oracle_tolower(expr))
+                      END
+                   || ' ' || CASE WHEN des THEN 'DESC' ELSE 'ASC' END;
+      separator := ', ';
+   END LOOP;
+
+   IF old_t <> '' THEN
+      /* catch exceptions because the expression might be untranslatable */
+      BEGIN
+         EXECUTE stmt || ')';
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT;
+            RAISE WARNING 'Error executing "%"', stmt || ')'
+               USING DETAIL = errmsg;
+      END;
+   END IF;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'third step of "oracle_migrate": create constraints and indexes';
@@ -576,8 +760,22 @@ CREATE FUNCTION oracle_migrate_finish(
    staging_schema name    DEFAULT NAME 'ora_staging'
 ) RETURNS void
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
-$$BEGIN
+$$DECLARE
+   old_msglevel text;
+BEGIN
+   RAISE NOTICE 'Dropping staging schema ...';
+
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
    EXECUTE format('DROP SCHEMA %I CASCADE', staging_schema);
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RAISE NOTICE 'Migration completed.';
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_finish(name) IS 'final step of "oracle_migrate": drop staging schema';
@@ -601,7 +799,7 @@ BEGIN
    /*
     * First step:
     * Create staging schema and define the oracle metadata views there.
-    * Create the destination schemas and the foreign tables there.
+    * Create the destination schemas and the foreign tables and sequences there.
     */
    PERFORM oracle_migrate_prepare(server, staging_schema, schemas, max_long);
 

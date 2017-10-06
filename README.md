@@ -5,8 +5,59 @@ ora_migrator is a PostgreSQL extension that uses
 [oracle_fdw](http://laurenz.github.io/oracle_fdw/)
 to migrate an Oracle database to PostgreSQL.
 
-In addition to that, it provides foreign tables and views that allow
-convenient access to Oracle metadata from PostgreSQL.
+Only sequences and normal tables with their constraints and indexes will
+be migrated, all objects containing PL/SQL code (triggers, functions,
+procedures and packages) will have to be migrated by hand.
+
+In addition to that, the extension can be used to create foreign tables
+and views that allow convenient access to Oracle metadata from PostgreSQL.
+
+Cookbook
+========
+
+A superuser sets the stage:
+
+    CREATE EXTENSION oracle_fdw;
+
+    CREATE EXTENSION ora_migrator;
+
+    CREATE SERVER oracle FOREIGN DATA WRAPPER oracle_fdw
+       OPTIONS (dbserver '//dbserver.mydomain.com/ORADB');
+
+    GRANT USAGE ON FOREIGN SERVER oracle TO migrator;
+
+    CREATE USER MAPPING FOR migrator SERVER oracle
+       OPTIONS (user 'orauser', password 'orapwd');
+
+User `migrator` has the privilege to create PostgreSQL schemas and read
+Oracle dictionaries.
+
+Now we connect as `migrator` and perform the migration so that all objects
+will belong to this user:
+
+    SELECT oracle_migrate('oracle');
+
+    NOTICE:  Creating staging schema ...
+    NOTICE:  Creating foreign tables for schema "LAURENZ"...
+    NOTICE:  Creating foreign tables for schema "SOCIAL"...
+    NOTICE:  Creating sequences ...
+    NOTICE:  Migrating table "laurenz"."department" ...
+    NOTICE:  Migrating table "laurenz"."employee" ...
+    NOTICE:  Migrating table "laurenz"."integers" ...
+    NOTICE:  Migrating table "laurenz"."log" ...
+    NOTICE:  Migrating table "social"."blog" ...
+    NOTICE:  Migrating table "social"."email" ...
+    NOTICE:  Creating UNIQUE and PRIMARY KEY constraints ...
+    NOTICE:  Creating FOREIGN KEY constraints ...
+    NOTICE:  Creating CHECK constraints ...
+    NOTICE:  Creating indexes ...
+    NOTICE:  Dropping staging schema ...
+    NOTICE:  Migration completed.
+    DEBUG:  oracle_fdw: commit remote transaction
+     oracle_migrate
+    ----------------
+
+    (1 row)
 
 Prerequisites
 =============
@@ -63,24 +114,26 @@ Objects created by the extension
 
 - Function `oracle_migrate`:
 
-  Performs a migration from an Oracle foreign server to PostgreSQL.
+  Performs a migration from an Oracle foreign server to PostgreSQL.  
+  Only tables and sequences are migrated, triggers, functions, procedures
+  and packages will have to migrated by hand.
 
   The parameters are:
 
-  - `server`: the name of the Oracle foreign server which will be migrated
+  - `server`: The name of the Oracle foreign server which will be migrated
     to PostgreSQL.  
     You must have the `USAGE` privilege on that server.
 
-  - `staging_schema` (default `ora_staging`): the name of a schema that
+  - `staging_schema` (default `ora_staging`): The name of a schema that
     will be created for temporary objects used during the migration
     (specifically, the objects created by `create_oraviews`).
 
-  - `schemas` (default NULL): an array of Oracle schema names
+  - `schemas` (default NULL): An array of Oracle schema names
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
 
-  - `max_long` (default 32767): the maximal length of view definitions,
+  - `max_long` (default 32767): The maximal length of view definitions,
     `DEFAULT` and index expressions in Oracle.
 
   You need permissions to create schemas in the PostgreSQL database
@@ -103,15 +156,19 @@ Objects created by the extension
   - Use `IMPORT FOREIGN SCHEMA` to create foreign tables in the
     destination schemas.
 
+  - Create sequences in the destination schemas.
+
 - Function `oracle_materialize`:
 
-  Replaces a foreign table with a real table.
+  Replaces a foreign table with a real table and migrates the contents.  
+  This function is used internally by `oracle_migrate_tables`, but can be useful
+  to parallelize migration (see the "Usage" section).
 
   The parameters are:
 
-  - `s`: name of the PostgreSQL schema where the foreign table is.
+  - `s`: The name of the PostgreSQL schema containing the foreign table.
 
-  - `t`: name of a foreign table.
+  - `t`: The name of the PostgreSQL foreign table.
 
 - Function `oracle_migrate_tables`:
 
@@ -120,10 +177,10 @@ Objects created by the extension
 
   The parameters are:
 
-  - `staging_schema` (default `ora_staging`): the name of the staging
+  - `staging_schema` (default `ora_staging`): The name of the staging
     schema created by `oracle_migrate_prepare`.
 
-  - `schemas` (default NULL): an array of Oracle schema names
+  - `schemas` (default NULL): An array of Oracle schema names
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
@@ -135,10 +192,10 @@ Objects created by the extension
 
   The parameters are:
 
-  - `staging_schema` (default `ora_staging`): the name of the staging
+  - `staging_schema` (default `ora_staging`): The name of the staging
     schema created by `oracle_migrate_prepare`.
 
-  - `schemas` (default NULL): an array of Oracle schema names
+  - `schemas` (default NULL): An array of Oracle schema names
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
@@ -149,7 +206,7 @@ Objects created by the extension
 
   Parameter:
 
-  - `staging_schema` (default `ora_staging`): the name of the staging
+  - `staging_schema` (default `ora_staging`): The name of the staging
     schema created by `oracle_migrate_prepare`.
 
 - Function `create_oraviews`:
@@ -158,16 +215,16 @@ Objects created by the extension
   Oracle metadata.  
   It takes the following parameters:
 
-  - `server`: the name of the Oracle foreign server for which the
+  - `server`: The name of the Oracle foreign server for which the
     foreign tables will be created.  
     You must have the `USAGE` privilege on that server.
 
-  - `schema` (default `public`): the name of the schema where the
+  - `schema` (default `public`): The name of the schema where the
     foreign tables and views will be created.  
     The schema must exist, and you must have the `CREATE` privilege
     on it.
 
-  - `max_long` (default 32767): the maximal length of view definitions,
+  - `max_long` (default 32767): The maximal length of view definitions,
     `DEFAULT` and index expressions in Oracle.
 
   Calling the function will create the following foreign tables and views:
@@ -190,7 +247,37 @@ Objects created by the extension
 Usage
 =====
 
-You can query the foreign tables with additional conditions, e.g.
+The main use of this extension is to migrate Oracle databases to PostgreSQL.
+
+You can either perform the migration by calling `oracle_migrate`, or you do
+it step by step:
+
+  - Call `oracle_migrate_prepare` to create the staging schema with the
+    Oracle metadata views, the destination schemas and the foreign tables
+    and sequences.
+
+  - Call `oracle_migrate_tables` to replace the foreign tables with normal
+    tables and migrate the contents from Oracle.
+
+    Alternatively, you can use `oracle_materialize` to do this step for
+    Each table individually. This has the advantage that you can
+    migrate several tables simultaneously in multiple database sessions,
+    which may speed up the migration process.
+
+  - Call `oracle_migrate_constraints` to migrate constraints and
+    indexes from Oracle.
+
+  - Call `oracle_migrate_finish` to remove the staging schema and complete
+    the migration.
+
+Apart from migration, you can use the function `create_oraviews` to create
+foreign tables and views that allow convenient access to Oracle metadata
+from PostgreSQL.
+
+This is used by `oracle_migrate_prepare` to populate the staging schema,
+but it may be useful for other tools.
+
+These foreign tables can be used in arbitrary queries, e.g.
 
     SELECT table_name,
            constraint_name,
@@ -202,8 +289,8 @@ You can query the foreign tables with additional conditions, e.g.
       AND remote_schema = 'LAURENZ'
     ORDER BY table_name, position;
 
-Conditions will be pushed down to Oracle whenever that is possible
-for oracle_fdw, so the queries should be efficient.
+The additional conditions will be pushed down to Oracle whenever that
+is possible for oracle_fdw, so the queries should be efficient.
 
-ALl Oracle object names will appear like they are in Oracle, which is
+All Oracle object names will appear like they are in Oracle, which is
 usually in upper case.
