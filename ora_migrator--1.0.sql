@@ -22,7 +22,7 @@ $$DECLARE
       '         ''''SCOTT'''', ''''SH'''', ''''SI_INFORMTN_SCHEMA'''', ''''SPATIAL_CSW_ADMIN_USR'''',\n'
       '         ''''SPATIAL_WFS_ADMIN_USR'''', ''''SYS'''', ''''SYSMAN'''', ''''SYSTEM'''', ''''TRACESRV'''',\n'
       '         ''''MTSSYS'''', ''''OASPUBLIC'''', ''''OLAPSYS'''', ''''OWBSYS'''', ''''OWBSYS_AUDIT'''',\n'
-      '         ''''WEBSYS'''', ''''WK_PROXY'''', ''''WKSYS'''', ''''WK_TEST'''', ''''WMSYS'''', ''''XDB''''', ''''XS$NULL'''';
+      '         ''''WEBSYS'''', ''''WK_PROXY'''', ''''WKSYS'''', ''''WK_TEST'''', ''''WMSYS'''', ''''XDB'''', ''''XS$NULL''''';
 
    ora_tables_sql text := E'CREATE FOREIGN TABLE %I.ora_tables (\n'
       '   schema     varchar(128) NOT NULL,\n'
