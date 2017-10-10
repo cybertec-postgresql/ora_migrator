@@ -259,7 +259,8 @@ $$DECLARE
       '       uniqueness,\n'
       '       position,\n'
       '       descend,\n'
-      '       coalesce(''('' || col_expression || '')'', col_name) AS column_name\n'
+      '       col_expression IS NOT NULL AS is_expression,\n'
+      '       coalesce(col_expression, col_name) AS column_name\n'
       'FROM %I.ora_index_exp\n';
 
    ora_schemas_sql text := E'CREATE FOREIGN TABLE %I.ora_schemas (\n'
@@ -570,6 +571,7 @@ $$DECLARE
    expr         text;
    uniq         boolean;
    des          boolean;
+   is_expr      boolean;
    errmsg       text;
    old_msglevel text;
 BEGIN
@@ -744,8 +746,8 @@ BEGIN
    old_s := '';
    old_t := '';
    old_c := '';
-   FOR loc_s, loc_t, ind_name, uniq, colpos, des, expr IN
-      SELECT schema, table_name, index_name, uniqueness, position, descend, column_name
+   FOR loc_s, loc_t, ind_name, uniq, colpos, des, is_expr, expr IN
+      SELECT schema, table_name, index_name, uniqueness, position, descend, is_expression, column_name
          FROM ora_index_columns
       WHERE schemas IS NULL
          OR schema =ANY (schemas)
@@ -776,8 +778,8 @@ BEGIN
 
       /* fold expressions to lower case */
       stmt := stmt || separator
-                   || CASE WHEN substring(expr FROM 1 FOR 1) = '('
-                           THEN lower(expr)
+                   || CASE WHEN is_expr
+                           THEN '(' || lower(expr) || ')'
                            ELSE quote_ident(oracle_tolower(expr))
                       END
                    || ' ' || CASE WHEN des THEN 'DESC' ELSE 'ASC' END;
