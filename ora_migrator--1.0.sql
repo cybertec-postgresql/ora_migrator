@@ -349,18 +349,28 @@ CREATE FUNCTION oracle_materialize(
 ) RETURNS void
    LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
 $$DECLARE
-   ft name;
+   ft     name;
+   errmsg text;
 BEGIN
-   /* rename the foreign table */
-   ft := t || E'\x07';
-   EXECUTE format('ALTER FOREIGN TABLE %I.%I RENAME TO %I', s, t, ft);
+   BEGIN
+      /* rename the foreign table */
+      ft := t || E'\x07';
+      EXECUTE format('ALTER FOREIGN TABLE %I.%I RENAME TO %I', s, t, ft);
 
-   /* create a table and fill it */
-   EXECUTE format('CREATE TABLE %I.%I (LIKE %I.%I)', s, t, s, ft);
-   EXECUTE format('INSERT INTO %I.%I SELECT * FROM %I.%I', s, t, s, ft);
+      /* create a table and fill it */
+      EXECUTE format('CREATE TABLE %I.%I (LIKE %I.%I)', s, t, s, ft);
+      EXECUTE format('INSERT INTO %I.%I SELECT * FROM %I.%I', s, t, s, ft);
 
-   /* drop the foreign table */
-   EXECUTE format('DROP FOREIGN TABLE %I.%I', s, ft);
+      /* drop the foreign table */
+      EXECUTE format('DROP FOREIGN TABLE %I.%I', s, ft);
+   EXCEPTION
+      WHEN others THEN
+         /* turn the error into a warning */
+         GET STACKED DIAGNOSTICS
+            errmsg := MESSAGE_TEXT;
+         RAISE WARNING 'Error loading table data for %.%', s, t
+            USING DETAIL = errmsg;
+   END;
 END;$$;
 
 COMMENT ON FUNCTION oracle_materialize(name, name) IS 'turn an Oracle foreign table into a PostgreSQL table';
@@ -592,7 +602,17 @@ BEGIN
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
          IF old_t <> '' THEN
-            EXECUTE stmt || stmt_suffix;
+            BEGIN
+                  EXECUTE stmt || stmt_suffix;
+            EXCEPTION
+               WHEN others THEN
+                  /* turn the error into a warning */
+                  GET STACKED DIAGNOSTICS
+                     errmsg := MESSAGE_TEXT;
+                  RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
+                                oracle_tolower(old_s), oracle_tolower(old_t)
+                     USING DETAIL = errmsg;
+            END;
          END IF;
 
          stmt := format('ALTER TABLE %I.%I ADD %s (',
@@ -612,7 +632,17 @@ BEGIN
    END LOOP;
 
    IF old_t <> '' THEN
-      EXECUTE stmt || stmt_suffix;
+      BEGIN
+         EXECUTE stmt || stmt_suffix;
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT;
+            RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
+                          oracle_tolower(old_s), oracle_tolower(old_t)
+               USING DETAIL = errmsg;
+      END;
    END IF;
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
@@ -635,7 +665,17 @@ BEGIN
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
          IF old_t <> '' THEN
-            EXECUTE stmt || stmt_middle || stmt_suffix;
+            BEGIN
+               EXECUTE stmt || stmt_middle || stmt_suffix;
+            EXCEPTION
+               WHEN others THEN
+                  /* turn the error into a warning */
+                  GET STACKED DIAGNOSTICS
+                     errmsg := MESSAGE_TEXT;
+                  RAISE WARNING 'Error creating foreign key constraint on table %.%',
+                                oracle_tolower(old_s), oracle_tolower(old_t)
+                     USING DETAIL = errmsg;
+            END;
          END IF;
 
          stmt := format('ALTER TABLE %I.%I ADD FOREIGN KEY (',
@@ -657,7 +697,17 @@ BEGIN
    END LOOP;
 
    IF old_t <> '' THEN
-      EXECUTE stmt || stmt_middle || stmt_suffix;
+      BEGIN
+         EXECUTE stmt || stmt_middle || stmt_suffix;
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT;
+            RAISE WARNING 'Error creating foreign key constraint on table %.%',
+                          oracle_tolower(old_s), oracle_tolower(old_t)
+               USING DETAIL = errmsg;
+      END;
    END IF;
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
@@ -672,7 +722,6 @@ BEGIN
          OR schema =ANY (schemas))
         AND condition !~ e'^"[^"]*" IS NOT NULL$'
    LOOP
-      /* catch exceptions because the expression might be untranslatable */
       BEGIN
          EXECUTE format('ALTER TABLE %I.%I ADD CHECK(%s)',
                        oracle_tolower(loc_s), oracle_tolower(loc_t), oracle_tolower(expr));
@@ -704,7 +753,6 @@ BEGIN
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> ind_name THEN
          IF old_t <> '' THEN
-            /* catch exceptions because the expression might be untranslatable */
             BEGIN
                EXECUTE stmt || ')';
             EXCEPTION
@@ -737,7 +785,6 @@ BEGIN
    END LOOP;
 
    IF old_t <> '' THEN
-      /* catch exceptions because the expression might be untranslatable */
       BEGIN
          EXECUTE stmt || ')';
       EXCEPTION
@@ -749,6 +796,39 @@ BEGIN
                USING DETAIL = errmsg;
       END;
    END IF;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Setting column default values ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all default expressions */
+   FOR loc_s, loc_t, colname, expr IN
+      SELECT schema, table_name, column_name, default_value
+      FROM ora_columns
+      WHERE (schemas IS NULL
+         OR schema =ANY (schemas))
+        AND default_value IS NOT NULL
+   LOOP
+      expr := replace(replace(lower(expr),
+                              'sysdate',
+                              'current_date'),
+                      'systimestamp',
+                      'current_timestamp');
+
+      BEGIN
+         EXECUTE format('ALTER TABLE %I.%I ALTER %I SET DEFAULT %s',
+                        oracle_tolower(loc_s), oracle_tolower(loc_t),
+                        oracle_tolower(colname), expr);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT;
+            RAISE WARNING 'Error setting default value on % of table %.% to "%"',
+                          oracle_tolower(colname), oracle_tolower(loc_s), oracle_tolower(loc_t), expr
+               USING DETAIL = errmsg;
+      END;
+   END LOOP;
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
