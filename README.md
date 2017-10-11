@@ -29,8 +29,8 @@ A superuser sets the stage:
     CREATE USER MAPPING FOR migrator SERVER oracle
        OPTIONS (user 'orauser', password 'orapwd');
 
-User `migrator` has the privilege to create PostgreSQL schemas and read
-Oracle dictionaries.
+PostgreSQL user `migrator` has the privilege to create PostgreSQL schemas
+and Oracle user `orauser` has the `SELECT ANY DICTIONARY` privilege.
 
 Now we connect as `migrator` and perform the migration so that all objects
 will belong to this user:
