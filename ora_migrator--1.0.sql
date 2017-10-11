@@ -309,6 +309,36 @@ $$DECLARE
       '       trigger_body\n'
       'FROM %I.ora_trig';
 
+   ora_pack_src_sql text := E'CREATE FOREIGN TABLE %I.ora_pack_src (\n'
+      '   schema       varchar(128) NOT NULL,\n'
+      '   package_name varchar(128) NOT NULL,\n'
+      '   src_type     varchar(12)  NOT NULL,\n'
+      '   line_number  integer      NOT NULL,\n'
+      '   line         text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT pro.owner,\n'
+         '       pro.object_name,\n'
+         '       src.type,\n'
+         '       src.line,\n'
+         '       src.text\n'
+         'FROM all_procedures pro\n'
+         '   JOIN all_source src\n'
+         '      ON pro.owner = src.owner\n'
+         '         AND pro.object_name = src.name\n'
+         'WHERE pro.object_type = ''''PACKAGE''''\n'
+         '  AND src.type IN (''''PACKAGE'''', ''''PACKAGE BODY'''')\n'
+         '  AND procedure_name IS NULL\n'
+         '  AND pro.owner NOT IN (' || ora_sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_packages_sql text := E'CREATE VIEW %I.ora_packages AS\n'
+      'SELECT schema,\n'
+      '       package_name,\n'
+      '       src_type = ''PACKAGE BODY'' AS is_body,\n'
+      '       string_agg(line, TEXT '''' ORDER BY line_number) AS source\n'
+      'FROM %I.ora_pack_src\n'
+      'GROUP BY schema, package_name, src_type';
+
 BEGIN
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -367,6 +397,13 @@ BEGIN
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_trig IS ''Oracle triggers on foreign server "%I"''', schema, server);
    EXECUTE format(ora_triggers_sql, schema, schema);
    EXECUTE format('COMMENT ON VIEW %I.ora_triggers IS ''Oracle triggers on foreign server "%I"''', schema, server);
+   /* ora_pack_src and ora_packages */
+   EXECUTE format('DROP VIEW IF EXISTS %I.ora_packages', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_pack_src', schema);
+   EXECUTE format(ora_pack_src_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_pack_src IS ''Oracle package source lines on foreign server "%I"''', schema, server);
+   EXECUTE format(ora_packages_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.ora_packages IS ''Oracle packages on foreign server "%I"''', schema, server);
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;

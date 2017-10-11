@@ -236,6 +236,7 @@ Objects created by the extension
   - `ora_functions`: source code of Oracle functions and procedures
     (but not package or object definitions)
   - `ora_keys`: columns of Oracle primary and foreign keys
+  - `ora_packages`: source code of Oracle packages and package bodies
   - `ora_tables`: Oracle tables
   - `ora_triggers`: Oracle triggers
   - `ora_views`: definition of Oracle views
