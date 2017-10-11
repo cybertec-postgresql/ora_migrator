@@ -237,6 +237,7 @@ Objects created by the extension
     (but not package or object definitions)
   - `ora_keys`: columns of Oracle primary and foreign keys
   - `ora_tables`: Oracle tables
+  - `ora_triggers`: Oracle triggers
   - `ora_views`: definition of Oracle views
   - `ora_sequences`: Oracle sequences
   - `ora_index_columns`: columns of Oracle indexes that do *not* belong

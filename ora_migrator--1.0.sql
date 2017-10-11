@@ -268,8 +268,46 @@ $$DECLARE
       ') SERVER %I OPTIONS (table ''('
          'SELECT username\n'
          'FROM all_users\n'
-         'WHERE username NOT IN( ' || ora_sys_schemas || E')\n'
+         'WHERE username NOT IN( ' || ora_sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_trig_sql text := E'CREATE FOREIGN TABLE %I.ora_trig (\n'
+      '   schema            varchar(128) NOT NULL,\n'
+      '   table_name        varchar(128) NOT NULL,\n'
+      '   trigger_name      varchar(128) NOT NULL,\n'
+      '   trigger_type      varchar(16)  NOT NULL,\n'
+      '   triggering_event  varchar(227) NOT NULL,\n'
+      '   when_clause       text,\n'
+      '   referencing_names varchar(128) NOT NULL,\n'
+      '   trigger_body      text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT table_owner,\n'
+         '       table_name,\n'
+         '       trigger_name,\n'
+         '       trigger_type,\n'
+         '       triggering_event,\n'
+         '       when_clause,\n'
+         '       referencing_names,\n'
+         '       trigger_body\n'
+         'FROM all_triggers\n'
+         'WHERE table_owner NOT IN( ' || ora_sys_schemas || E')\n'
+         '  AND base_object_type IN (''''TABLE'''', ''''VIEW'''')\n'
+         '  AND status = ''''ENABLED''''\n'
+         '  AND crossedition = ''''NO''''\n'
+         '  AND trigger_type <> ''''COMPOUND'''''
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_triggers_sql text := E'CREATE VIEW %I.ora_triggers AS\n'
+      'SELECT schema,\n'
+      '       table_name,\n'
+      '       trigger_name,\n'
+      '       trigger_type LIKE ''BEFORE%%'' AS is_before,\n'
+      '       triggering_event,\n'
+      '       trigger_type LIKE ''%%EACH ROW'' AS for_each_row,\n'
+      '       when_clause,\n'
+      '       referencing_names,\n'
+      '       trigger_body\n'
+      'FROM %I.ora_trig';
 
 BEGIN
    /* remember old setting */
@@ -322,6 +360,13 @@ BEGIN
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_schemas', schema);
    EXECUTE format(ora_schemas_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_schemas IS ''Oracle schemas on foreign server "%I"''', schema, server);
+   /* ora_trig and ora_triggers */
+   EXECUTE format('DROP VIEW IF EXISTS %I.ora_triggers', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_trig', schema);
+   EXECUTE format(ora_trig_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_trig IS ''Oracle triggers on foreign server "%I"''', schema, server);
+   EXECUTE format(ora_triggers_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.ora_triggers IS ''Oracle triggers on foreign server "%I"''', schema, server);
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
