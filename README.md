@@ -82,16 +82,24 @@ Prerequisites
   - `ALL_IND_EXPRESSIONS`
   - `ALL_INDEXES`
   - `ALL_MVIEWS`
-  - `ALL_PROCEDURES`
   - `ALL_SEQUENCES`
-  - `ALL_SOURCE`
   - `ALL_TAB_COLUMNS`
   - `ALL_TABLES`
   - `ALL_USERS`
-  - `ALL_VIEWS`
 
-  You can choose to grant the use the `SELECT ANY DICTIONARY`
-  system privilege instead.
+  The above privileges are required for database migration.
+
+  Additionally, `SELECT` privileges on the following dictionary views are
+  required by some oth the views created by `create_oraviews`:
+  
+  - `ALL_PROCEDURES`
+  - `ALL_SOURCE`
+  - `ALL_VIEWS`
+  - `DBA_TAB_PRIVS`
+  - `DBA_COL_PRIVS`
+
+  You can choose to grant the user the `SELECT ANY DICTIONARY`
+  system privilege instead, which includes all of the above.
 
 Installation
 ============
@@ -231,12 +239,14 @@ Objects created by the extension
 
   - `oracle_schemas`: Oracle schemas
   - `ora_checks`: Oracle ckeck constraints
+  - `ora_column_privs`: Privileges on Oracle table columns
   - `ora_columns`: columns of Oracle tables and views
   - `ora_foreign_keys`: columns of Oracle foreign key constraints
   - `ora_functions`: source code of Oracle functions and procedures
     (but not package or object definitions)
   - `ora_keys`: columns of Oracle primary and foreign keys
   - `ora_packages`: source code of Oracle packages and package bodies
+  - `ora_table_privs`: Privileges on Oracle tables
   - `ora_tables`: Oracle tables
   - `ora_triggers`: Oracle triggers
   - `ora_views`: definition of Oracle views

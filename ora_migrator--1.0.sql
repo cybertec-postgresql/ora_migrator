@@ -339,6 +339,48 @@ $$DECLARE
       'FROM %I.ora_pack_src\n'
       'GROUP BY schema, package_name, src_type';
 
+   ora_table_privs_sql text := E'CREATE FOREIGN TABLE %I.ora_table_privs (\n'
+      '   schema     varchar(128) NOT NULL,\n'
+      '   table_name varchar(128) NOT NULL,\n'
+      '   privilege  varchar(40)  NOT NULL,\n'
+      '   grantor    varchar(128) NOT NULL,\n'
+      '   grantee    varchar(128) NOT NULL,\n'
+      '   grantable  boolean      NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       table_name,\n'
+         '       privilege,\n'
+         '       grantor,\n'
+         '       grantee,\n'
+         '       CASE WHEN grantable = ''''YES'''' THEN 1 ELSE 0 END grantable\n'
+         'FROM dba_tab_privs\n'
+         'WHERE owner NOT IN (' || ora_sys_schemas || E')\n'
+         '  AND grantor NOT IN (' || ora_sys_schemas || E')\n'
+         '  AND grantee NOT IN (' || ora_sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   ora_column_privs_sql text := E'CREATE FOREIGN TABLE %I.ora_column_privs (\n'
+      '   schema      varchar(128) NOT NULL,\n'
+      '   table_name  varchar(128) NOT NULL,\n'
+      '   column_name varchar(128) NOT NULL,\n'
+      '   privilege   varchar(40)  NOT NULL,\n'
+      '   grantor     varchar(128) NOT NULL,\n'
+      '   grantee     varchar(128) NOT NULL,\n'
+      '   grantable   boolean      NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       table_name,\n'
+         '       column_name,\n'
+         '       privilege,\n'
+         '       grantor,\n'
+         '       grantee,\n'
+         '       CASE WHEN grantable = ''''YES'''' THEN 1 ELSE 0 END grantable\n'
+         'FROM dba_col_privs\n'
+         'WHERE owner NOT IN (' || ora_sys_schemas || E')\n'
+         '  AND grantor NOT IN (' || ora_sys_schemas || E')\n'
+         '  AND grantee NOT IN (' || ora_sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
 BEGIN
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -404,6 +446,14 @@ BEGIN
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_pack_src IS ''Oracle package source lines on foreign server "%I"''', schema, server);
    EXECUTE format(ora_packages_sql, schema, schema);
    EXECUTE format('COMMENT ON VIEW %I.ora_packages IS ''Oracle packages on foreign server "%I"''', schema, server);
+   /* ora_table_privs */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_table_privs', schema);
+   EXECUTE format(ora_table_privs_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_table_privs IS ''Privileges on Oracle tables on foreign server "%I"''', schema, server);
+   /* ora_column_privs */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.ora_column_privs', schema);
+   EXECUTE format(ora_column_privs_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.ora_column_privs IS ''Privileges on Oracle table columns on foreign server "%I"''', schema, server);
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
