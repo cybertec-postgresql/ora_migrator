@@ -147,6 +147,9 @@ Objects created by the extension
   You need permissions to create schemas in the PostgreSQL database
   to use this function.
 
+  The return value is the number of captured errors that have been turned
+  into warnings.
+
 - Function `oracle_migrate_prepare`:
 
   Performs the first step of `oracle_migrate`.
@@ -166,6 +169,9 @@ Objects created by the extension
 
   - Create sequences in the destination schemas.
 
+  The return value is the number of captured errors that have been turned
+  into warnings.
+
 - Function `oracle_materialize`:
 
   Replaces a foreign table with a real table and migrates the contents.  
@@ -177,6 +183,8 @@ Objects created by the extension
   - `s`: The name of the PostgreSQL schema containing the foreign table.
 
   - `t`: The name of the PostgreSQL foreign table.
+
+  The return value is TRUE if the operation succeeded, otherwise FALSE.
 
 - Function `oracle_migrate_tables`:
 
@@ -193,6 +201,9 @@ Objects created by the extension
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
 
+  The return value is the number of captured errors that have been turned
+  into warnings.
+
 - Function `oracle_migrate_constraints`:
 
   Creates constraints and indexes on all tables migrated from Oracle with
@@ -208,6 +219,9 @@ Objects created by the extension
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
 
+  The return value is the number of captured errors that have been turned
+  into warnings.
+
 - Function `oracle_migrate_finish`:
 
   Drops the staging schema.
@@ -216,6 +230,9 @@ Objects created by the extension
 
   - `staging_schema` (default `ora_staging`): The name of the staging
     schema created by `oracle_migrate_prepare`.
+
+  The return value is the number of captured errors that have been turned
+  into warnings.
 
 - Function `create_oraviews`:
 

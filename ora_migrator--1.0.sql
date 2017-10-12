@@ -479,7 +479,7 @@ $$SELECT CASE WHEN $1 < -9223372036854775808
 CREATE FUNCTION oracle_materialize(
    s name,
    t name
-) RETURNS void
+) RETURNS boolean
    LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
 $$DECLARE
    ft     name;
@@ -496,6 +496,8 @@ BEGIN
 
       /* drop the foreign table */
       EXECUTE format('DROP FOREIGN TABLE %I.%I', s, ft);
+
+      RETURN TRUE;
    EXCEPTION
       WHEN others THEN
          /* turn the error into a warning */
@@ -504,6 +506,8 @@ BEGIN
          RAISE WARNING 'Error loading table data for %.%', s, t
             USING DETAIL = errmsg;
    END;
+
+   RETURN FALSE;
 END;$$;
 
 COMMENT ON FUNCTION oracle_materialize(name, name) IS 'turn an Oracle foreign table into a PostgreSQL table';
@@ -513,7 +517,7 @@ CREATE FUNCTION oracle_migrate_prepare(
    staging_schema name    DEFAULT NAME 'ora_staging',
    schemas        name[]  DEFAULT NULL,
    max_long       integer DEFAULT 32767
-) RETURNS void
+) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
    s            name;
@@ -619,6 +623,8 @@ BEGIN
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN 0;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name[], integer) IS 'first step of "oracle_migrate": create schemas and foreign table definitions';
@@ -626,13 +632,14 @@ COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name[], integer) IS 'firs
 CREATE FUNCTION oracle_migrate_tables(
    staging_schema name    DEFAULT NAME 'ora_staging',
    schemas        name[]  DEFAULT NULL
-) RETURNS void
+) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
    extschema    name;
    s            name;
    t            name;
    old_msglevel text;
+   rc           integer := 0;
 BEGIN
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -663,12 +670,16 @@ BEGIN
          SET LOCAL client_min_messages = warning;
 
          /* turn that foreign table into a real table */
-         PERFORM oracle_materialize(oracle_tolower(s), t);
+         IF NOT oracle_materialize(oracle_tolower(s), t) THEN
+            rc := rc + 1;
+         END IF;
       END LOOP;
    END LOOP;
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_tables(name, name[]) IS 'second step of "oracle_migrate": copy tables from Oracle';
@@ -676,7 +687,7 @@ COMMENT ON FUNCTION oracle_migrate_tables(name, name[]) IS 'second step of "orac
 CREATE FUNCTION oracle_migrate_constraints(
    staging_schema name    DEFAULT NAME 'ora_staging',
    schemas        name[]  DEFAULT NULL
-) RETURNS void
+) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
    extschema    name;
@@ -706,6 +717,7 @@ $$DECLARE
    is_expr      boolean;
    errmsg       text;
    old_msglevel text;
+   rc           integer := 0;
 BEGIN
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -746,6 +758,8 @@ BEGIN
                   RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
                                 oracle_tolower(old_s), oracle_tolower(old_t)
                      USING DETAIL = errmsg;
+
+                  rc := rc + 1;
             END;
          END IF;
 
@@ -776,6 +790,8 @@ BEGIN
             RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
                           oracle_tolower(old_s), oracle_tolower(old_t)
                USING DETAIL = errmsg;
+
+            rc := rc + 1;
       END;
    END IF;
 
@@ -809,6 +825,8 @@ BEGIN
                   RAISE WARNING 'Error creating foreign key constraint on table %.%',
                                 oracle_tolower(old_s), oracle_tolower(old_t)
                      USING DETAIL = errmsg;
+
+                  rc := rc + 1;
             END;
          END IF;
 
@@ -841,6 +859,8 @@ BEGIN
             RAISE WARNING 'Error creating foreign key constraint on table %.%',
                           oracle_tolower(old_s), oracle_tolower(old_t)
                USING DETAIL = errmsg;
+
+            rc := rc + 1;
       END;
    END IF;
 
@@ -867,6 +887,8 @@ BEGIN
             RAISE WARNING 'Error creating CHECK constraint on table %.% with expression "%"',
                           oracle_tolower(loc_s), oracle_tolower(loc_t), oracle_tolower(expr)
                USING DETAIL = errmsg;
+
+            rc := rc + 1;
       END;
    END LOOP;
 
@@ -896,6 +918,8 @@ BEGIN
                      errmsg := MESSAGE_TEXT;
                   RAISE WARNING 'Error executing "%"', stmt || ')'
                      USING DETAIL = errmsg;
+
+                  rc := rc + 1;
             END;
          END IF;
 
@@ -928,6 +952,8 @@ BEGIN
                errmsg := MESSAGE_TEXT;
             RAISE WARNING 'Error executing "%"', stmt || ')'
                USING DETAIL = errmsg;
+
+            rc := rc + 1;
       END;
    END IF;
 
@@ -961,18 +987,22 @@ BEGIN
             RAISE WARNING 'Error setting default value on % of table %.% to "%"',
                           oracle_tolower(colname), oracle_tolower(loc_s), oracle_tolower(loc_t), expr
                USING DETAIL = errmsg;
+
+            rc := rc + 1;
       END;
    END LOOP;
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'third step of "oracle_migrate": create constraints and indexes';
 
 CREATE FUNCTION oracle_migrate_finish(
    staging_schema name    DEFAULT NAME 'ora_staging'
-) RETURNS void
+) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
    old_msglevel text;
@@ -989,7 +1019,7 @@ BEGIN
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 
-   RAISE NOTICE 'Migration completed.';
+   RETURN 0;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_finish(name) IS 'final step of "oracle_migrate": drop staging schema';
@@ -999,10 +1029,11 @@ CREATE FUNCTION oracle_migrate(
    staging_schema name    DEFAULT NAME 'ora_staging',
    schemas        name[]  DEFAULT NULL,
    max_long       integer DEFAULT 32767
-) RETURNS void
+) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
    extschema name;
+   rc        integer := 0;
 BEGIN
    /* set "search_path" to the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
@@ -1015,25 +1046,29 @@ BEGIN
     * Create staging schema and define the oracle metadata views there.
     * Create the destination schemas and the foreign tables and sequences there.
     */
-   PERFORM oracle_migrate_prepare(server, staging_schema, schemas, max_long);
+   rc := rc + oracle_migrate_prepare(server, staging_schema, schemas, max_long);
 
    /*
     * Second step:
     * Copy the tables over from Oracle.
     */
-   PERFORM oracle_migrate_tables(staging_schema, schemas);
+   rc := rc + oracle_migrate_tables(staging_schema, schemas);
 
    /*
     * Third step:
     * Create constraints and indexes.
     */
-   PERFORM oracle_migrate_constraints(staging_schema, schemas);
+   rc := rc + oracle_migrate_constraints(staging_schema, schemas);
 
    /*
-    * Second step:
-    * Copy the tables over from Oracle.
+    * Final step:
+    * Drop the staging schema.
     */
-   PERFORM oracle_migrate_finish(staging_schema);
+   rc := rc + oracle_migrate_finish(staging_schema);
+
+   RAISE NOTICE 'Migration completed with % errors.', rc;
+
+   RETURN rc;
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate(name, name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';
