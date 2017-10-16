@@ -136,7 +136,7 @@ Objects created by the extension
     will be created for temporary objects used during the migration
     (specifically, the objects created by `create_oraviews`).
 
-  - `schemas` (default NULL): An array of Oracle schema names
+  - `only_schemas` (default NULL): An array of Oracle schema names
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
@@ -196,7 +196,7 @@ Objects created by the extension
   - `staging_schema` (default `ora_staging`): The name of the staging
     schema created by `oracle_migrate_prepare`.
 
-  - `schemas` (default NULL): An array of Oracle schema names
+  - `only_schemas` (default NULL): An array of Oracle schema names
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
@@ -214,7 +214,7 @@ Objects created by the extension
   - `staging_schema` (default `ora_staging`): The name of the staging
     schema created by `oracle_migrate_prepare`.
 
-  - `schemas` (default NULL): An array of Oracle schema names
+  - `only_schemas` (default NULL): An array of Oracle schema names
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
@@ -254,21 +254,21 @@ Objects created by the extension
 
   Calling the function will create the following foreign tables and views:
 
-  - `oracle_schemas`: Oracle schemas
-  - `ora_checks`: Oracle ckeck constraints
-  - `ora_column_privs`: Privileges on Oracle table columns
-  - `ora_columns`: columns of Oracle tables and views
-  - `ora_foreign_keys`: columns of Oracle foreign key constraints
-  - `ora_functions`: source code of Oracle functions and procedures
+  - `schemas`: Oracle schemas
+  - `checks`: Oracle ckeck constraints
+  - `column_privs`: Privileges on Oracle table columns
+  - `columns`: columns of Oracle tables and views
+  - `foreign_keys`: columns of Oracle foreign key constraints
+  - `functions`: source code of Oracle functions and procedures
     (but not package or object definitions)
-  - `ora_keys`: columns of Oracle primary and foreign keys
-  - `ora_packages`: source code of Oracle packages and package bodies
-  - `ora_table_privs`: Privileges on Oracle tables
-  - `ora_tables`: Oracle tables
-  - `ora_triggers`: Oracle triggers
-  - `ora_views`: definition of Oracle views
-  - `ora_sequences`: Oracle sequences
-  - `ora_index_columns`: columns of Oracle indexes that do *not* belong
+  - `keys`: columns of Oracle primary and foreign keys
+  - `packages`: source code of Oracle packages and package bodies
+  - `table_privs`: Privileges on Oracle tables
+  - `tables`: Oracle tables
+  - `triggers`: Oracle triggers
+  - `views`: definition of Oracle views
+  - `sequences`: Oracle sequences
+  - `index_columns`: columns of Oracle indexes that do *not* belong
     to a constraint
 
   Objects in Oracle system schemas will not be shown.
@@ -313,7 +313,7 @@ These foreign tables can be used in arbitrary queries, e.g.
            column_name,
            remote_table,
            remote_column
-    FROM ora_foreign_keys
+    FROM foreign_keys
     WHERE schema = 'LAURENZ'
       AND remote_schema = 'LAURENZ'
     ORDER BY table_name, position;
