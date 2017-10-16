@@ -629,6 +629,175 @@ END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name[], integer) IS 'first step of "oracle_migrate": create schemas and foreign table definitions';
 
+CREATE FUNCTION oracle_migrate_pgstage(
+   staging_schema name    DEFAULT NAME 'ora_staging',
+   pgstage_schema name    DEFAULT NAME 'pgsql_staging'
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   c_col        refcursor;
+   v_schema     varchar(128);
+   v_table      varchar(128);
+   v_column     varchar(128);
+   v_pos        integer;
+   v_type       varchar(128);
+   v_typschema  varchar(128);
+   v_length     integer;
+   v_precision  integer;
+   v_scale      integer;
+   v_nullable   boolean;
+   v_default    text;
+   n_type       text;
+   geom_type    text := 'text';
+   expr         text;
+   old_msglevel text;
+BEGIN
+   RAISE NOTICE 'Copy definitions to PostgreSQL staging schema "%" ...', pgstage_schema;
+
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* get the postgis geometry type if it exists */
+   SELECT extnamespace::regnamespace::text || '.geometry' INTO geom_type
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'postgis';
+
+   /* get the ora_migrator extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+
+   /* create PostgreSQL staging schema */
+   BEGIN
+      EXECUTE format('CREATE SCHEMA %I', pgstage_schema);
+   EXCEPTION
+      WHEN insufficient_privilege THEN
+         RAISE insufficient_privilege USING
+            MESSAGE = 'you do not have permission to create a schema in this database';
+      WHEN duplicate_schema THEN
+         RAISE duplicate_schema USING
+            MESSAGE = 'staging schema "' || pgstage_schema || '" already exists',
+            HINT = 'Drop the staging schema first or use a different one.';
+   END;
+
+   /* set "search_path" to the Oracle stage */
+   EXECUTE format('SET LOCAL search_path = %I', staging_schema);
+
+   /* open cursors for columns */
+   OPEN c_col FOR
+      SELECT schema, table_name, column_name, position, type_name, type_schema,
+             length, precision, scale, nullable, default_value 
+      FROM columns;
+
+   /* set "search_path" to the PostgreSQL and Oracle stage */
+   EXECUTE format('SET LOCAL search_path = %I, %I, %I', pgstage_schema, staging_schema, extschema);
+
+   /* create PostgreSQL "columns" tables */
+   CREATE TABLE columns(
+      schema        name    NOT NULL,
+      table_name    name    NOT NULL,
+      column_name   name    NOT NULL,
+      position      integer NOT NULL,
+      type_name     name    NOT NULL,
+      nullable      boolean NOT NULL,
+      default_value text
+   );
+
+   /* loop through Oracle columns and translate them to PostgreSQL columns */
+   LOOP
+      FETCH c_col INTO v_schema, v_table, v_column, v_pos, v_type, v_typschema,
+                   v_length, v_precision, v_scale, v_nullable, v_default;
+
+      EXIT WHEN NOT FOUND;
+
+      /* get the PostgreSQL type */
+      CASE
+         WHEN v_type = 'VARCHAR2'  THEN n_type := 'character varying(' || v_length || ')';
+         WHEN v_type = 'NVARCHAR2' THEN n_type := 'character varying(' || v_length || ')';
+         WHEN v_type = 'CHAR'      THEN n_type := 'character(' || v_length || ')';
+         WHEN v_type = 'NCHAR'     THEN n_type := 'character(' || v_length || ')';
+         WHEN v_type = 'CLOB'      THEN n_type := 'text';
+         WHEN v_type = 'LONG'      THEN n_type := 'text';
+         WHEN v_type = 'NUMBER'    THEN 
+            IF v_precision IS NULL THEN n_type := 'numeric';
+            ELSIF v_scale = 0  THEN
+               IF v_precision < 5     THEN n_type := 'smallint';
+               ELSIF v_precision < 10 THEN n_type := 'integer';
+               ELSIF v_precision < 19 THEN n_type := 'bigint';
+               ELSE n_type := 'numeric(' || v_precision || ')';
+               END IF;
+            ELSE n_type := 'numeric(' || v_precision || ', ' || v_scale || ')';
+            END IF;
+         WHEN v_type = 'FLOAT' THEN
+            IF v_precision < 54 THEN n_type := 'float(' || v_precision || ')';
+            ELSE n_type := 'numeric';
+            END IF;
+         WHEN v_type = 'BINARY_FLOAT'  THEN n_type := 'real';
+         WHEN v_type = 'BINARY_DOUBLE' THEN n_type := 'double precision';
+         WHEN v_type = 'RAW'           THEN n_type := 'bytea';
+         WHEN v_type = 'BLOB'          THEN n_type := 'bytea';
+         WHEN v_type = 'BFILE'         THEN n_type := 'bytea';
+         WHEN v_type = 'LONG RAW'      THEN n_type := 'bytea';
+         WHEN v_type = 'DATE'          THEN n_type := 'timestamp(0) without time zone';
+         WHEN substr(v_type, 1, 9) = 'TIMESTAMP' THEN
+            IF length(v_type) < 17 THEN n_type := 'timestamp(' || least(v_scale, 6) || ') without time zone';
+            ELSE n_type := 'timestamp(' || least(v_scale, 6) || ') with time zone';
+            END IF;
+         WHEN substr(v_type, 1, 8) = 'INTERVAL' THEN
+            IF substr(v_type, 10, 3) = 'DAY' THEN n_type := 'interval(' || least(v_scale, 6) || ')';
+            ELSE n_type := 'interval(0)';
+            END IF;
+         WHEN v_type = 'SDO_GEOMETRY' AND v_typschema = 'MDSYS' THEN n_type := geom_type;
+         ELSE n_type := 'text';  -- cannot translate
+      END CASE;
+
+      /* try to translate default value */
+      expr := replace(replace(lower(v_default),
+                              'sysdate',
+                              'current_date'),
+                      'systimestamp',
+                      'current_timestamp');
+
+      /* insert a row into the columns table */
+      INSERT INTO columns (schema, table_name, column_name, position, type_name, nullable, default_value)
+         VALUES (
+            oracle_tolower(v_schema),
+            oracle_tolower(v_table),
+            oracle_tolower(v_column),
+            v_pos,
+            n_type,
+            v_nullable,
+            expr
+         );
+   END LOOP;
+
+   CLOSE c_col;
+
+   ALTER TABLE columns ADD PRIMARY KEY (schema, table_name, column_name);
+   ALTER TABLE columns ADD UNIQUE (schema, table_name, column_name, position);
+
+   /* copy "tables" table */
+   CREATE TABLE tables(
+      schema name NOT NULL,
+      table_name name
+   );
+   EXECUTE format(E'INSERT INTO tables\n'
+                   '   SELECT oracle_tolower(schema), oracle_tolower(table_name)\n'
+                   'FROM %I.tables', staging_schema);
+   ALTER TABLE tables ADD PRIMARY KEY (schema, table_name);
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN 0;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_pgstage(name, name) IS 'create and populate a PostgreSQL staging schema from an Oracle staging schema';
+
 CREATE FUNCTION oracle_migrate_tables(
    staging_schema name    DEFAULT NAME 'ora_staging',
    only_schemas   name[]  DEFAULT NULL
@@ -1001,13 +1170,14 @@ END;$$;
 COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'third step of "oracle_migrate": create constraints and indexes';
 
 CREATE FUNCTION oracle_migrate_finish(
-   staging_schema name    DEFAULT NAME 'ora_staging'
+   staging_schema name    DEFAULT NAME 'ora_staging',
+   pgstage_schema name    DEFAULT NAME 'pgsql_staging'
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
    old_msglevel text;
 BEGIN
-   RAISE NOTICE 'Dropping staging schema ...';
+   RAISE NOTICE 'Dropping staging schemas ...';
 
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -1015,6 +1185,7 @@ BEGIN
    SET LOCAL client_min_messages = warning;
 
    EXECUTE format('DROP SCHEMA %I CASCADE', staging_schema);
+   EXECUTE format('DROP SCHEMA %I CASCADE', pgstage_schema);
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
@@ -1022,11 +1193,12 @@ BEGIN
    RETURN 0;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_finish(name) IS 'final step of "oracle_migrate": drop staging schema';
+COMMENT ON FUNCTION oracle_migrate_finish(name, name) IS 'final step of "oracle_migrate": drop staging schema';
 
 CREATE FUNCTION oracle_migrate(
    server         name,
    staging_schema name    DEFAULT NAME 'ora_staging',
+   pgstage_schema name    DEFAULT NAME 'pgsql_staging',
    only_schemas   name[]  DEFAULT NULL,
    max_long       integer DEFAULT 32767
 ) RETURNS integer
@@ -1050,12 +1222,18 @@ BEGIN
 
    /*
     * Second step:
-    * Copy the tables over from Oracle.
+    * Create a PostgreSQL staging schema and populate it with data copied from the Oracle stage.
     */
-   rc := rc + oracle_migrate_tables(staging_schema, only_schemas);
+   rc := rc + oracle_migrate_pgstage(staging_schema, pgstage_schema);
 
    /*
     * Third step:
+    * Copy the tables over from Oracle.
+    */
+   rc := rc + oracle_migrate_tables(pgstage_schema, only_schemas);
+
+   /*
+    * Fourth step:
     * Create constraints and indexes.
     */
    rc := rc + oracle_migrate_constraints(staging_schema, only_schemas);
@@ -1064,11 +1242,11 @@ BEGIN
     * Final step:
     * Drop the staging schema.
     */
-   rc := rc + oracle_migrate_finish(staging_schema);
+   rc := rc + oracle_migrate_finish(staging_schema, pgstage_schema);
 
    RAISE NOTICE 'Migration completed with % errors.', rc;
 
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate(name, name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';
+COMMENT ON FUNCTION oracle_migrate(name, name, name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';

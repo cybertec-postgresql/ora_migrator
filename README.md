@@ -133,8 +133,13 @@ Objects created by the extension
     You must have the `USAGE` privilege on that server.
 
   - `staging_schema` (default `ora_staging`): The name of a schema that
-    will be created for temporary objects used during the migration
+    will be created for objects used during the migration
     (specifically, the objects created by `create_oraviews`).
+    This schema will be dropped after the migration is completed.
+
+  - `pgstage_schema` (default `pgsql_staging`): The name of a schema that
+    will be created for tables containing PostgreSQL metadata.
+    This schema will be dropped after the migration is completed.
 
   - `only_schemas` (default NULL): An array of Oracle schema names
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
@@ -158,7 +163,7 @@ Objects created by the extension
 
   Steps performed:
 
-  - Create the staging schema.
+  - Create the Oracle staging schema.
 
   - Call `create_oraviews` to create the metadata views there.
 
@@ -172,11 +177,25 @@ Objects created by the extension
   The return value is the number of captured errors that have been turned
   into warnings.
 
+- Function `oracle_migrate_pgstage`:
+
+  Creates a second staging schema and fills it with data from
+  the Oracle staging schema.
+
+  The parameters are:
+
+  - `staging_schema` (default `ora_staging`): Oracle staging schema created
+    with `oracle_migrate_prepare`.
+
+  - `pgstage_schema` (default `pgsql_staging`): The name of a schema that
+    will be created and populated with tables containing PostgreSQL metadata.
+    This schema will be dropped after the migration is completed.
+
 - Function `oracle_materialize`:
 
   Replaces a foreign table with a real table and migrates the contents.  
-  This function is used internally by `oracle_migrate_tables`, but can be useful
-  to parallelize migration (see the "Usage" section).
+  This function is used internally by `oracle_migrate_tables`, but can be
+  useful to parallelize migration (see the "Usage" section).
 
   The parameters are:
 
@@ -228,8 +247,11 @@ Objects created by the extension
 
   Parameter:
 
-  - `staging_schema` (default `ora_staging`): The name of the staging
+  - `staging_schema` (default `ora_staging`): The name of the Oracle staging
     schema created by `oracle_migrate_prepare`.
+
+  - `pgstage_schema` (default `pgsql_staging`): The name of the PostgreSQL
+    staging schema created by `oracle_migrate_pgschema`.
 
   The return value is the number of captured errors that have been turned
   into warnings.
