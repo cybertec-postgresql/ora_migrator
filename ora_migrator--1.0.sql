@@ -514,7 +514,8 @@ COMMENT ON FUNCTION oracle_materialize(name, name) IS 'turn an Oracle foreign ta
 
 CREATE FUNCTION oracle_migrate_prepare(
    server         name,
-   staging_schema name    DEFAULT NAME 'ora_staging',
+   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
    only_schemas   name[]  DEFAULT NULL,
    max_long       integer DEFAULT 32767
 ) RETURNS integer
@@ -532,6 +533,21 @@ $$DECLARE
    cachesiz     integer;
    lastval      numeric;
    old_msglevel text;
+   c_col        refcursor;
+   v_schema     varchar(128);
+   v_table      varchar(128);
+   v_column     varchar(128);
+   v_pos        integer;
+   v_type       varchar(128);
+   v_typschema  varchar(128);
+   v_length     integer;
+   v_precision  integer;
+   v_scale      integer;
+   v_nullable   boolean;
+   v_default    text;
+   n_type       text;
+   geom_type    text := 'text';
+   expr         text;
 BEGIN
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -558,10 +574,10 @@ BEGIN
    EXECUTE format('SET LOCAL search_path = %I', extschema);
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-   RAISE NOTICE 'Creating staging schema ...';
+   RAISE NOTICE 'Creating staging schemas ...';
    SET LOCAL client_min_messages = warning;
 
-   /* create staging schema */
+   /* create Oracle staging schema */
    BEGIN
       EXECUTE format('CREATE SCHEMA %I', staging_schema);
    EXCEPTION
@@ -574,115 +590,31 @@ BEGIN
             HINT = 'Drop the staging schema first or use a different one.';
    END;
 
-   /* create the migration views in the staging schema */
-   PERFORM create_oraviews(server, staging_schema, max_long);
-
-   /* set "search_path" to the staging schema and the extension schema */
-   EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
-
-   /* loop through the schemas that should be migrated */
-   FOR s IN
-      SELECT schema FROM schemas
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
-   LOOP
-      EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-      RAISE NOTICE 'Creating foreign tables for schema "%"...', s;
-      SET LOCAL client_min_messages = warning;
-
-      /* create schema */
-      EXECUTE format('CREATE SCHEMA %I', oracle_tolower(s));
-
-      /* get a list of tables in the schema */
-      SELECT string_agg(format('%I', oracle_tolower(table_name)), ', ') INTO tablist
-         FROM tables
-         WHERE schema = s;
-
-      CONTINUE WHEN tablist IS NULL;
-
-      /* create foreign tables for all these tables */
-      EXECUTE format('IMPORT FOREIGN SCHEMA %I LIMIT TO (%s) FROM SERVER %I INTO %I', s, tablist, server, oracle_tolower(s));
-   END LOOP;
+   /* create PostgreSQL staging schema */
+   BEGIN
+      EXECUTE format('CREATE SCHEMA %I', pgstage_schema);
+   EXCEPTION
+      WHEN duplicate_schema THEN
+         RAISE duplicate_schema USING
+            MESSAGE = 'staging schema "' || pgstage_schema || '" already exists',
+            HINT = 'Drop the staging schema first or use a different one.';
+   END;
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-   RAISE NOTICE 'Creating sequences ...';
+   RAISE NOTICE 'Creating Oracle metadata views ...';
    SET LOCAL client_min_messages = warning;
 
-   /* loop through all sequences */
-   FOR sch, seq, minv, maxv, incr, cycl, cachesiz, lastval IN
-      SELECT schema, sequence_name, min_value, max_value, increment_by, cyclical, cache_size, last_value
-         FROM sequences
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
-   LOOP
-      EXECUTE format('CREATE SEQUENCE %I.%I INCREMENT %s MINVALUE %s MAXVALUE %s START %s CACHE %s %sCYCLE',
-                     oracle_tolower(sch), oracle_tolower(seq), adjust_to_bigint(incr), adjust_to_bigint(minv),
-                     adjust_to_bigint(maxv), adjust_to_bigint(lastval + 1), cachesiz,
-                     CASE WHEN cycl THEN '' ELSE 'NO ' END);
-   END LOOP;
+   /* create the migration views in the Oracle staging schema */
+   PERFORM create_oraviews(server, staging_schema, max_long);
 
-   /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-
-   RETURN 0;
-END;$$;
-
-COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name[], integer) IS 'first step of "oracle_migrate": create schemas and foreign table definitions';
-
-CREATE FUNCTION oracle_migrate_pgstage(
-   staging_schema name    DEFAULT NAME 'ora_staging',
-   pgstage_schema name    DEFAULT NAME 'pgsql_staging'
-) RETURNS integer
-   LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
-$$DECLARE
-   extschema    name;
-   c_col        refcursor;
-   v_schema     varchar(128);
-   v_table      varchar(128);
-   v_column     varchar(128);
-   v_pos        integer;
-   v_type       varchar(128);
-   v_typschema  varchar(128);
-   v_length     integer;
-   v_precision  integer;
-   v_scale      integer;
-   v_nullable   boolean;
-   v_default    text;
-   n_type       text;
-   geom_type    text := 'text';
-   expr         text;
-   old_msglevel text;
-BEGIN
    RAISE NOTICE 'Copy definitions to PostgreSQL staging schema "%" ...', pgstage_schema;
-
-   /* remember old setting */
-   old_msglevel := current_setting('client_min_messages');
-   /* make the output less verbose */
    SET LOCAL client_min_messages = warning;
 
    /* get the postgis geometry type if it exists */
    SELECT extnamespace::regnamespace::text || '.geometry' INTO geom_type
       FROM pg_catalog.pg_extension
       WHERE extname = 'postgis';
-
-   /* get the ora_migrator extension schema */
-   SELECT extnamespace::regnamespace INTO extschema
-      FROM pg_catalog.pg_extension
-      WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I', extschema);
-
-   /* create PostgreSQL staging schema */
-   BEGIN
-      EXECUTE format('CREATE SCHEMA %I', pgstage_schema);
-   EXCEPTION
-      WHEN insufficient_privilege THEN
-         RAISE insufficient_privilege USING
-            MESSAGE = 'you do not have permission to create a schema in this database';
-      WHEN duplicate_schema THEN
-         RAISE duplicate_schema USING
-            MESSAGE = 'staging schema "' || pgstage_schema || '" already exists',
-            HINT = 'Drop the staging schema first or use a different one.';
-   END;
 
    /* set "search_path" to the Oracle stage */
    EXECUTE format('SET LOCAL search_path = %I', staging_schema);
@@ -691,10 +623,12 @@ BEGIN
    OPEN c_col FOR
       SELECT schema, table_name, column_name, position, type_name, type_schema,
              length, precision, scale, nullable, default_value 
-      FROM columns;
+      FROM columns
+      WHERE only_schemas IS NULL
+         OR schema =ANY (only_schemas);
 
-   /* set "search_path" to the PostgreSQL and Oracle stage */
-   EXECUTE format('SET LOCAL search_path = %I, %I, %I', pgstage_schema, staging_schema, extschema);
+   /* set "search_path" to the PostgreSQL stage */
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
 
    /* create PostgreSQL "columns" tables */
    CREATE TABLE columns(
@@ -777,18 +711,231 @@ BEGIN
 
    CLOSE c_col;
 
+   /* constraints for the "columns" table */
    ALTER TABLE columns ADD PRIMARY KEY (schema, table_name, column_name);
    ALTER TABLE columns ADD UNIQUE (schema, table_name, column_name, position);
 
    /* copy "tables" table */
-   CREATE TABLE tables(
+   CREATE TABLE tables (
       schema name NOT NULL,
       table_name name
    );
    EXECUTE format(E'INSERT INTO tables\n'
-                   '   SELECT oracle_tolower(schema), oracle_tolower(table_name)\n'
-                   'FROM %I.tables', staging_schema);
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(table_name)\n'
+                   '   FROM %I.tables\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                  staging_schema)
+      USING only_schemas;
    ALTER TABLE tables ADD PRIMARY KEY (schema, table_name);
+
+   /* copy "checks" table */
+   CREATE TABLE checks (
+      schema          name    NOT NULL,
+      table_name      name    NOT NULL,
+      constraint_name name    NOT NULL,
+      "deferrable"    boolean NOT NULL,
+      deferred        boolean NOT NULL,
+      condition       text    NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO checks\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(table_name),\n'
+                   '          oracle_tolower(constraint_name),\n'
+                   '          "deferrable",\n'
+                   '          deferred,\n'
+                   '          lower(condition)\n'
+                   '   FROM %I.checks\n'
+                   '   WHERE ($1 IS NULL OR schema =ANY ($1))\n'
+                   '     AND condition !~ ''^"[^"]*" IS NOT NULL$''',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE checks ADD PRIMARY KEY (schema, table_name, constraint_name);
+
+  /* copy "foreign_keys" table */
+  CREATE TABLE foreign_keys (
+     schema          name    NOT NULL,
+     table_name      name    NOT NULL,
+     constraint_name name    NOT NULL,
+     "deferrable"    boolean NOT NULL,
+     deferred        boolean NOT NULL,
+     delete_rule     text    NOT NULL,
+     column_name     name    NOT NULL,
+     position        integer NOT NULL,
+     remote_schema   name    NOT NULL,
+     remote_table    name    NOT NULL,
+     remote_column   name    NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO foreign_keys\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(table_name),\n'
+                   '          oracle_tolower(constraint_name),\n'
+                   '          "deferrable",\n'
+                   '          deferred,\n'
+                   '          delete_rule,\n'
+                   '          oracle_tolower(column_name),\n'
+                   '          position,\n'
+                   '          oracle_tolower(remote_schema)\n'
+                   '          oracle_tolower(remote_table),\n'
+                   '          oracle_tolower(remote_column)\n'
+                   '   FROM %I.foreign_keys\n'
+                   '   WHERE ($1 IS NULL OR schema =ANY ($1) AND remote_schema =ANY ($1))\n',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE foreign_keys ADD PRIMARY KEY (schema, table_name, constraint_name);
+   ALTER TABLE foreign_keys ADD UNIQUE (schema, table_name, constraint_name, position);
+
+   /* copy "keys" table */
+   CREATE TABLE keys (
+      schema          name     NOT NULL,
+      table_name      name     NOT NULL,
+      constraint_name name     NOT NULL,
+      "deferrable"    boolean  NOT NULL,
+      deferred        boolean  NOT NULL,
+      column_name     name     NOT NULL,
+      position        integer  NOT NULL,
+      is_primary      boolean  NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO keys\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(table_name),\n'
+                   '          oracle_tolower(constraint_name),\n'
+                   '          "deferrable",\n'
+                   '          deferred,\n'
+                   '          oracle_tolower(column_name),\n'
+                   '          position,\n'
+                   '          is_primary\n'
+                   '   FROM %I.keys\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE keys ADD PRIMARY KEY (schema, table_name, constraint_name);
+   ALTER TABLE keys ADD UNIQUE (schema, table_name, constraint_name, position);
+
+   /* copy "views" table */
+   CREATE TABLE views (
+      schema     name NOT NULL,
+      view_name  name NOT NULL,
+      definition text NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO views\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(view_name),\n'
+                   '          definition\n'
+                   '   FROM %I.views\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE views ADD PRIMARY KEY (schema, view_name);
+
+   /* copy "functions" view */
+   CREATE TABLE functions (
+      schema         name    NOT NULL,
+      function_name  name    NOT NULL,
+      is_procedure   boolean NOT NULL,
+      source         text    NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO functions\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(function_name),\n'
+                   '          is_procedure,\n'
+                   '          source\n'
+                   '   FROM %I.functions\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE functions ADD PRIMARY KEY (schema, function_name);
+
+   /* copy "sequences" view */
+   CREATE TABLE sequences (
+      schema        name    NOT NULL,
+      sequence_name name    NOT NULL,
+      min_value     bigint,
+      max_value     bigint,
+      increment_by  bigint  NOT NULL,
+      cyclical      boolean NOT NULL,
+      cache_size    integer NOT NULL,
+      last_value    bigint  NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO sequences\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(sequence_name),\n'
+                   '          adjust_to_bigint(min_value),\n'
+                   '          adjust_to_bigint(max_value),\n'
+                   '          adjust_to_bigint(increment_by),\n'
+                   '          cyclical,\n'
+                   '          cache_size,\n'
+                   '          adjust_to_bigint(last_value)\n'
+                   '   FROM %I.sequences\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE sequences ADD PRIMARY KEY (schema, sequence_name);
+
+   /* copy "index_columns" view */
+   CREATE TABLE index_columns (
+      schema        name NOT NULL,
+      table_name    name NOT NULL,
+      index_name    name NOT NULL,
+      uniqueness    boolean NOT NULL,
+      position      integer NOT NULL,
+      descend       boolean NOT NULL,
+      is_expression boolean NOT NULL,
+      column_name   text    NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO index_columns\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(table_name),\n'
+                   '          oracle_tolower(index_name),\n'
+                   '          uniqueness,\n'
+                   '          position,\n'
+                   '          descend,\n'
+                   '          is_expression,\n'
+                   '          oracle_tolower(column_name)\n'
+                   '   FROM %I.index_columns\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE index_columns ADD PRIMARY KEY (schema, index_name);
+
+   /* copy "schemas" table */
+   CREATE TABLE schemas (
+      schema name NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO schemas\n'
+                   '   SELECT oracle_tolower(schema)\n'
+                   '   FROM %I.schemas\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE schemas ADD PRIMARY KEY (schema);
+
+   /* copy "triggers" view */
+   CREATE TABLE triggers (
+      schema            name         NOT NULL,
+      table_name        name         NOT NULL,
+      trigger_name      name         NOT NULL,
+      is_before         boolean      NOT NULL,
+      triggering_event  varchar(227) NOT NULL,
+      for_each_row      boolean      NOT NULL,
+      when_clause       text,
+      referencing_names name         NOT NULL,
+      trigger_body      text         NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO triggers\n'
+                   '   SELECT oracle_tolower(schema)\n'
+                   '          oracle_tolower(table_name)\n'
+                   '          oracle_tolower(trigger_name)\n'
+                   '          is_before,\n'
+                   '          triggering_event,\n'
+                   '          for_each_row,\n'
+                   '          referencing_names,\n'
+                   '          trigger_body,'
+                   '   FROM %I.triggers\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE triggers ADD PRIMARY KEY (schema, table_name, trigger_name);
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
@@ -796,10 +943,10 @@ BEGIN
    RETURN 0;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_pgstage(name, name) IS 'create and populate a PostgreSQL staging schema from an Oracle staging schema';
+COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name, name[], integer) IS 'first step of "oracle_migrate": create schemas and foreign table definitions';
 
 CREATE FUNCTION oracle_migrate_tables(
-   staging_schema name    DEFAULT NAME 'ora_staging',
+   staging_schema name    DEFAULT NAME 'ora_stage',
    only_schemas   name[]  DEFAULT NULL
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
@@ -821,12 +968,45 @@ BEGIN
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
 
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating schemas ...';
+   SET LOCAL client_min_messages = warning;
+
    /* loop through the schemas that should be migrated */
    FOR s IN
       SELECT schema FROM schemas
       WHERE only_schemas IS NULL
          OR schema =ANY (only_schemas)
    LOOP
+      /* create schema */
+      EXECUTE format('CREATE SCHEMA %I', oracle_tolower(s));
+   END LOOP;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating sequences ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all sequences */
+   FOR sch, seq, minv, maxv, incr, cycl, cachesiz, lastval IN
+      SELECT schema, sequence_name, min_value, max_value, increment_by, cyclical, cache_size, last_value
+         FROM sequences
+      WHERE only_schemas IS NULL
+         OR schema =ANY (only_schemas)
+   LOOP
+      EXECUTE format('CREATE SEQUENCE %I.%I INCREMENT %s MINVALUE %s MAXVALUE %s START %s CACHE %s %sCYCLE',
+                     oracle_tolower(sch), oracle_tolower(seq), adjust_to_bigint(incr), adjust_to_bigint(minv),
+                     adjust_to_bigint(maxv), adjust_to_bigint(lastval + 1), cachesiz,
+                     CASE WHEN cycl THEN '' ELSE 'NO ' END);
+   END LOOP;
+
+   /* loop through the schemas that should be migrated */
+   FOR s IN
+      SELECT schema FROM schemas
+      WHERE only_schemas IS NULL
+         OR schema =ANY (only_schemas)
+   LOOP
+      /* XXX create foreign tables */
+
       /* loop through all external tables in that schema */
       FOR t IN
          SELECT relname
@@ -854,7 +1034,7 @@ END;$$;
 COMMENT ON FUNCTION oracle_migrate_tables(name, name[]) IS 'second step of "oracle_migrate": copy tables from Oracle';
 
 CREATE FUNCTION oracle_migrate_constraints(
-   staging_schema name    DEFAULT NAME 'ora_staging',
+   staging_schema name    DEFAULT NAME 'ora_stage',
    only_schemas   name[]  DEFAULT NULL
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
@@ -1170,8 +1350,8 @@ END;$$;
 COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'third step of "oracle_migrate": create constraints and indexes';
 
 CREATE FUNCTION oracle_migrate_finish(
-   staging_schema name    DEFAULT NAME 'ora_staging',
-   pgstage_schema name    DEFAULT NAME 'pgsql_staging'
+   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage'
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
@@ -1197,8 +1377,8 @@ COMMENT ON FUNCTION oracle_migrate_finish(name, name) IS 'final step of "oracle_
 
 CREATE FUNCTION oracle_migrate(
    server         name,
-   staging_schema name    DEFAULT NAME 'ora_staging',
-   pgstage_schema name    DEFAULT NAME 'pgsql_staging',
+   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
    only_schemas   name[]  DEFAULT NULL,
    max_long       integer DEFAULT 32767
 ) RETURNS integer
