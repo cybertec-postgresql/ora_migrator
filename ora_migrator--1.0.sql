@@ -30,14 +30,14 @@ $$DECLARE
       ') SERVER %I OPTIONS (table ''('
          'SELECT owner,\n'
          '       table_name\n'
-         'FROM all_tables\n'
+         'FROM dba_tables\n'
          'WHERE temporary = ''''N''''\n'
          '  AND secondary = ''''N''''\n'
          '  AND nested    = ''''NO''''\n'
          '  AND dropped   = ''''NO''''\n'
          '  AND (owner, table_name)\n'
          '     NOT IN (SELECT owner, mview_name\n'
-         '             FROM all_mviews)\n'
+         '             FROM dba_mviews)\n'
          '  AND owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -65,7 +65,7 @@ $$DECLARE
          '       data_scale,\n'
          '       CASE WHEN nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable,\n'
          '       data_default\n'
-         'FROM all_tab_columns\n'
+         'FROM dba_tab_columns\n'
          'WHERE owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -83,7 +83,7 @@ $$DECLARE
          '       CASE WHEN deferrable = ''''DEFERRABLE'''' THEN 1 ELSE 0 END deferrable,\n'
          '       CASE WHEN deferred   = ''''DEFERRED''''   THEN 1 ELSE 0 END deferred,\n'
          '       search_condition\n'
-         'FROM all_constraints\n'
+         'FROM dba_constraints\n'
          'WHERE constraint_type = ''''C''''\n'
          '  AND status          = ''''ENABLED''''\n'
          '  AND validated       = ''''VALIDATED''''\n'
@@ -115,10 +115,10 @@ $$DECLARE
          '       r_col.owner AS remote_schema,\n'
          '       r_col.table_name AS remote_table,\n'
          '       r_col.column_name AS remote_column\n'
-         'FROM all_constraints con\n'
-         '   JOIN all_cons_columns col\n'
+         'FROM dba_constraints con\n'
+         '   JOIN dba_cons_columns col\n'
          '      ON (con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name)\n'
-         '   JOIN all_cons_columns r_col\n'
+         '   JOIN dba_cons_columns r_col\n'
          '      ON (con.r_owner = r_col.owner AND con.r_constraint_name = r_col.constraint_name)\n'
          'WHERE con.constraint_type = ''''R''''\n'
          '  AND con.owner NOT IN (' || sys_schemas || E')'
@@ -142,8 +142,8 @@ $$DECLARE
          '       col.column_name,\n'
          '       col.position,\n'
          '       CASE WHEN con.constraint_type = ''''P'''' THEN 1 ELSE 0 END is_primary\n'
-         'FROM all_constraints con\n'
-         '   JOIN all_cons_columns col\n'
+         'FROM dba_constraints con\n'
+         '   JOIN dba_cons_columns col\n'
          '      ON (con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name)\n'
          'WHERE con.constraint_type IN (''''P'''', ''''U'''')\n'
          '  AND con.owner NOT IN (' || sys_schemas || E')'
@@ -157,7 +157,7 @@ $$DECLARE
          'SELECT owner,\n'
          '       view_name,\n'
          '       text\n'
-         'FROM all_views\n'
+         'FROM dba_views\n'
          'WHERE owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -173,8 +173,8 @@ $$DECLARE
          '       CASE WHEN pro.object_type = ''''PROCEDURE'''' THEN 1 ELSE 0 END is_procedure,\n'
          '       src.line,\n'
          '       src.text\n'
-         'FROM all_procedures pro\n'
-         '   JOIN all_source src\n'
+         'FROM dba_procedures pro\n'
+         '   JOIN dba_source src\n'
          '      ON pro.owner = src.owner\n'
          '         AND pro.object_name = src.name\n'
          '         AND pro.object_type = src.type\n'
@@ -208,7 +208,7 @@ $$DECLARE
          '       CASE WHEN cycle_flag = ''''Y'''' THEN 1 ELSE 0 END cyclical,\n'
          '       cache_size,\n'
          '       last_number\n'
-         'FROM all_sequences\n'
+         'FROM dba_sequences\n'
          'WHERE sequence_owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -230,9 +230,9 @@ $$DECLARE
          '       CASE WHEN ic.descend = ''''DESC'''' THEN 1 ELSE 0 END descend,\n'
          '       ic.column_name,\n'
          '       ie.column_expression\n'
-         'FROM all_indexes i,\n'
-         '     all_ind_columns ic,\n'
-         '     all_ind_expressions ie\n'
+         'FROM dba_indexes i,\n'
+         '     dba_ind_columns ic,\n'
+         '     dba_ind_expressions ie\n'
          'WHERE i.owner            = ic.index_owner\n'
          '  AND i.index_name       = ic.index_name\n'
          '  AND i.table_owner      = ic.table_owner\n'
@@ -244,7 +244,7 @@ $$DECLARE
          '  AND ic.column_position = ie.column_position(+)\n'
          '  AND i.index_type NOT IN (''''LOB'''', ''''DOMAIN'''')\n'
          '  AND NOT EXISTS (SELECT 1\n'
-         '                  FROM all_constraints c\n'
+         '                  FROM dba_constraints c\n'
          '                  WHERE c.owner = i.table_owner\n'
          '                    AND c.table_name = i.table_name\n'
          '                    AND COALESCE(c.index_owner, i.owner) = i.owner\n'
@@ -267,7 +267,7 @@ $$DECLARE
       '   schema varchar(128) NOT NULL\n'
       ') SERVER %I OPTIONS (table ''('
          'SELECT username\n'
-         'FROM all_users\n'
+         'FROM dba_users\n'
          'WHERE username NOT IN( ' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -289,7 +289,7 @@ $$DECLARE
          '       when_clause,\n'
          '       referencing_names,\n'
          '       trigger_body\n'
-         'FROM all_triggers\n'
+         'FROM dba_triggers\n'
          'WHERE table_owner NOT IN( ' || sys_schemas || E')\n'
          '  AND base_object_type IN (''''TABLE'''', ''''VIEW'''')\n'
          '  AND status = ''''ENABLED''''\n'
@@ -321,8 +321,8 @@ $$DECLARE
          '       src.type,\n'
          '       src.line,\n'
          '       src.text\n'
-         'FROM all_procedures pro\n'
-         '   JOIN all_source src\n'
+         'FROM dba_procedures pro\n'
+         '   JOIN dba_source src\n'
          '      ON pro.owner = src.owner\n'
          '         AND pro.object_name = src.name\n'
          'WHERE pro.object_type = ''''PACKAGE''''\n'
@@ -461,9 +461,10 @@ END;$$;
 
 COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle foreign tables for the metadata of a foreign server';
 
-CREATE FUNCTION oracle_tolower(text) RETURNS text
+CREATE FUNCTION oracle_tolower(text) RETURNS name
+   /* this will silently truncate anything exceeding 63 bytes ...*/
    LANGUAGE sql STABLE CALLED ON NULL INPUT SET search_path = pg_catalog AS
-'SELECT CASE WHEN $1 = upper($1) THEN lower($1) ELSE $1 END';
+'SELECT CASE WHEN $1 = upper($1) THEN lower($1)::name ELSE $1::name END';
 
 COMMENT ON FUNCTION oracle_tolower(text) IS 'helper function to fold Oracle names to lower case';
 
@@ -521,17 +522,7 @@ CREATE FUNCTION oracle_migrate_prepare(
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
-   s            name;
    extschema    name;
-   tablist      text;
-   sch          name;
-   seq          name;
-   minv         numeric;
-   maxv         numeric;
-   incr         numeric;
-   cycl         boolean;
-   cachesiz     integer;
-   lastval      numeric;
    old_msglevel text;
    c_col        refcursor;
    v_schema     varchar(128);
@@ -775,11 +766,11 @@ BEGIN
                    '          delete_rule,\n'
                    '          oracle_tolower(column_name),\n'
                    '          position,\n'
-                   '          oracle_tolower(remote_schema)\n'
+                   '          oracle_tolower(remote_schema),\n'
                    '          oracle_tolower(remote_table),\n'
                    '          oracle_tolower(remote_column)\n'
                    '   FROM %I.foreign_keys\n'
-                   '   WHERE ($1 IS NULL OR schema =ANY ($1) AND remote_schema =ANY ($1))\n',
+                   '   WHERE ($1 IS NULL OR schema =ANY ($1) AND remote_schema =ANY ($1))',
                   staging_schema)
       USING only_schemas;
    ALTER TABLE foreign_keys ADD PRIMARY KEY (schema, table_name, constraint_name);
@@ -806,7 +797,7 @@ BEGIN
                    '          position,\n'
                    '          is_primary\n'
                    '   FROM %I.keys\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
       USING only_schemas;
    ALTER TABLE keys ADD PRIMARY KEY (schema, table_name, constraint_name);
@@ -823,7 +814,7 @@ BEGIN
                    '          oracle_tolower(view_name),\n'
                    '          definition\n'
                    '   FROM %I.views\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
       USING only_schemas;
    ALTER TABLE views ADD PRIMARY KEY (schema, view_name);
@@ -841,7 +832,7 @@ BEGIN
                    '          is_procedure,\n'
                    '          source\n'
                    '   FROM %I.functions\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
       USING only_schemas;
    ALTER TABLE functions ADD PRIMARY KEY (schema, function_name);
@@ -867,7 +858,7 @@ BEGIN
                    '          cache_size,\n'
                    '          adjust_to_bigint(last_value)\n'
                    '   FROM %I.sequences\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
       USING only_schemas;
    ALTER TABLE sequences ADD PRIMARY KEY (schema, sequence_name);
@@ -891,12 +882,12 @@ BEGIN
                    '          position,\n'
                    '          descend,\n'
                    '          is_expression,\n'
-                   '          oracle_tolower(column_name)\n'
+                   '          CASE WHEN is_expression THEN lower(column_name) ELSE oracle_tolower(column_name) END\n'
                    '   FROM %I.index_columns\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE index_columns ADD PRIMARY KEY (schema, index_name);
+   ALTER TABLE index_columns ADD PRIMARY KEY (schema, index_name, position);
 
    /* copy "schemas" table */
    CREATE TABLE schemas (
@@ -905,7 +896,7 @@ BEGIN
    EXECUTE format(E'INSERT INTO schemas\n'
                    '   SELECT oracle_tolower(schema)\n'
                    '   FROM %I.schemas\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
       USING only_schemas;
    ALTER TABLE schemas ADD PRIMARY KEY (schema);
@@ -923,19 +914,84 @@ BEGIN
       trigger_body      text         NOT NULL
    );
    EXECUTE format(E'INSERT INTO triggers\n'
-                   '   SELECT oracle_tolower(schema)\n'
-                   '          oracle_tolower(table_name)\n'
-                   '          oracle_tolower(trigger_name)\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(table_name),\n'
+                   '          oracle_tolower(trigger_name),\n'
                    '          is_before,\n'
                    '          triggering_event,\n'
                    '          for_each_row,\n'
+                   '          when_clause,\n'
                    '          referencing_names,\n'
-                   '          trigger_body,'
+                   '          trigger_body\n'
                    '   FROM %I.triggers\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
       USING only_schemas;
    ALTER TABLE triggers ADD PRIMARY KEY (schema, table_name, trigger_name);
+
+   /* copy "packages" view */
+   CREATE TABLE packages (
+      schema       name    NOT NULL,
+      package_name name    NOT NULL,
+      is_body      boolean NOT NULL,
+      source       text    NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO packages\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(package_name),\n'
+                   '          is_body,\n'
+                   '          source\n'
+                   '   FROM %I.packages\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE packages ADD PRIMARY KEY (schema, package_name, is_body);
+
+   /* copy "table_privs" table */
+   CREATE TABLE table_privs (
+      schema     name        NOT NULL,
+      table_name name        NOT NULL,
+      privilege  varchar(40) NOT NULL,
+      grantor    name        NOT NULL,
+      grantee    name        NOT NULL,
+      grantable  boolean     NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO table_privs\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(table_name),\n'
+                   '          privilege,\n'
+                   '          oracle_tolower(grantor),\n'
+                   '          oracle_tolower(grantee),\n'
+                   '          grantable\n'
+                   '   FROM %I.table_privs\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE table_privs ADD PRIMARY KEY (schema, table_name, grantee, privilege);
+
+   /* copy "column_privs" table */
+   CREATE TABLE column_privs (
+      schema      name        NOT NULL,
+      table_name  name        NOT NULL,
+      column_name name        NOT NULL,
+      privilege   varchar(40) NOT NULL,
+      grantor     name        NOT NULL,
+      grantee     name        NOT NULL,
+      grantable   boolean     NOT NULL
+   );
+   EXECUTE format(E'INSERT INTO column_privs\n'
+                   '   SELECT oracle_tolower(schema),\n'
+                   '          oracle_tolower(table_name),\n'
+                   '          oracle_tolower(column_name),\n'
+                   '          privilege,\n'
+                   '          oracle_tolower(grantor),\n'
+                   '          oracle_tolower(grantee),\n'
+                   '          grantable\n'
+                   '   FROM %I.column_privs\n'
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                  staging_schema)
+      USING only_schemas;
+   ALTER TABLE column_privs ADD PRIMARY KEY (schema, table_name, column_name, grantee, privilege);
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
@@ -943,10 +999,12 @@ BEGIN
    RETURN 0;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name, name[], integer) IS 'first step of "oracle_migrate": create schemas and foreign table definitions';
+COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name, name[], integer) IS 'first step of "oracle_migrate": create and populate staging schemas';
 
-CREATE FUNCTION oracle_migrate_tables(
+CREATE FUNCTION oracle_migrate_mkforeign(
+   server         name,
    staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
    only_schemas   name[]  DEFAULT NULL
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
@@ -954,7 +1012,30 @@ $$DECLARE
    extschema    name;
    s            name;
    t            name;
+   sch          name;
+   seq          name;
+   minv         numeric;
+   maxv         numeric;
+   incr         numeric;
+   cycl         boolean;
+   cachesiz     integer;
+   lastval      numeric;
+   tab          name;
+   colname      name;
+   typ          text;
+   pos          integer;
+   nul          boolean;
+   def          text;
+   fsch         text;
+   ftab         text;
+   o_fsch       text;
+   o_ftab       text;
+   o_sch        name;
+   o_tab        name;
+   stmt         text;
+   separator    text;
    old_msglevel text;
+   errmsg       text;
    rc           integer := 0;
 BEGIN
    /* remember old setting */
@@ -962,11 +1043,11 @@ BEGIN
    /* make the output less verbose */
    SET LOCAL client_min_messages = warning;
 
-   /* set "search_path" to the staging schema and the extension schema */
+   /* set "search_path" to the PostgreSQL staging schema and the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
    RAISE NOTICE 'Creating schemas ...';
@@ -978,8 +1059,19 @@ BEGIN
       WHERE only_schemas IS NULL
          OR schema =ANY (only_schemas)
    LOOP
-      /* create schema */
-      EXECUTE format('CREATE SCHEMA %I', oracle_tolower(s));
+      BEGIN
+         /* create schema */
+         EXECUTE format('CREATE SCHEMA %I', s);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT;
+            RAISE WARNING 'Error creating schema "%"', s
+               USING DETAIL = errmsg;
+
+            rc := rc + 1;
+      END;
    END LOOP;
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
@@ -993,37 +1085,97 @@ BEGIN
       WHERE only_schemas IS NULL
          OR schema =ANY (only_schemas)
    LOOP
+      BEGIN
       EXECUTE format('CREATE SEQUENCE %I.%I INCREMENT %s MINVALUE %s MAXVALUE %s START %s CACHE %s %sCYCLE',
-                     oracle_tolower(sch), oracle_tolower(seq), adjust_to_bigint(incr), adjust_to_bigint(minv),
-                     adjust_to_bigint(maxv), adjust_to_bigint(lastval + 1), cachesiz,
+                     sch, seq, incr, minv, maxv, lastval + 1, cachesiz,
                      CASE WHEN cycl THEN '' ELSE 'NO ' END);
-   END LOOP;
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT;
+            RAISE WARNING 'Error creating sequence "%"."%"', sch, seq
+               USING DETAIL = errmsg;
 
-   /* loop through the schemas that should be migrated */
-   FOR s IN
-      SELECT schema FROM schemas
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
-   LOOP
-      /* XXX create foreign tables */
-
-      /* loop through all external tables in that schema */
-      FOR t IN
-         SELECT relname
-         FROM pg_catalog.pg_class
-         WHERE relnamespace = format('%I', oracle_tolower(s))::regnamespace
-           AND relkind = 'f'
-      LOOP
-         EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-         RAISE NOTICE 'Migrating table "%"."%" ...', oracle_tolower(s), t;
-         SET LOCAL client_min_messages = warning;
-
-         /* turn that foreign table into a real table */
-         IF NOT oracle_materialize(oracle_tolower(s), t) THEN
             rc := rc + 1;
-         END IF;
-      END LOOP;
+      END;
    END LOOP;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating foreign tables ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* create foreign tables */
+   o_sch := '';
+   o_tab := '';
+   stmt := '';
+   separator := '';
+   FOR sch, tab, colname, pos, typ, nul, def, fsch, ftab IN
+      EXECUTE format(
+         E'SELECT pc.schema,\n'
+          '       pc.table_name,\n'
+          '       pc.column_name,\n'
+          '       pc.position,\n'
+          '       pc.type_name,\n'
+          '       pc.nullable,\n'
+          '       pc.default_value,\n'
+          '       oc.schema,\n'
+          '       oc.table_name\n'
+          'FROM columns pc\n'
+          '   JOIN %I.columns oc\n'
+          '      ON pc.schema = oracle_tolower(oc.schema)\n'
+          '         AND pc.table_name = oracle_tolower(oc.table_name)\n'
+          '         AND pc.column_name = oracle_tolower(oc.column_name)\n'
+          'ORDER BY pc.schema, pc.table_name, pc.position',
+         staging_schema)
+   LOOP
+      IF o_sch <> sch OR o_tab <> tab THEN
+         IF o_tab <> '' THEN
+            BEGIN
+               EXECUTE stmt || format(E') SERVER %I\n'
+                                       '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'')',
+                                      server, o_fsch, o_ftab);
+            EXCEPTION
+               WHEN others THEN
+                  /* turn the error into a warning */
+                  GET STACKED DIAGNOSTICS
+                     errmsg := MESSAGE_TEXT;
+                  RAISE WARNING 'Error creating foreign table "%"."%"', sch, tab
+                     USING DETAIL = errmsg;
+
+                  rc := rc + 1;
+            END;
+         END IF;
+
+         stmt := format(E'CREATE FOREIGN TABLE %I.%I (\n', sch, tab);
+         o_sch := sch;
+         o_tab := tab;
+         o_fsch := fsch;
+         o_ftab := ftab;
+         separator := '';
+      END IF;
+
+      stmt := stmt || format(E'   %s%I %s\n', separator, colname, typ);
+      separator := ', ';
+   END LOOP;
+
+   /* last foreign table */
+   IF o_tab <> '' THEN
+      BEGIN
+         EXECUTE stmt || format(E') SERVER %I\n'
+                                 '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'')',
+                                server, o_fsch, o_ftab);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT;
+            RAISE WARNING 'Error creating foreign table "%"."%"', sch, tab
+               USING DETAIL = errmsg;
+
+            rc := rc + 1;
+      END;
+   END IF;
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
@@ -1031,7 +1183,44 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_tables(name, name[]) IS 'second step of "oracle_migrate": copy tables from Oracle';
+COMMENT ON FUNCTION oracle_migrate_mkforeign(name, name, name, name[]) IS 'second step of "oracle_migrate": create schemas, sequemces and foreign tables';
+
+CREATE FUNCTION oracle_migrate_tables(
+   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   old_msglevel text;
+   extschema    name;
+   sch          name;
+   tab          name;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+
+   /* turn that foreign table into a real table */
+   IF NOT oracle_materialize(sch, tab) THEN
+      rc := rc + 1;
+   END IF;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[]) IS 'third step of "oracle_migrate": copy tables from Oracle';
 
 CREATE FUNCTION oracle_migrate_constraints(
    staging_schema name    DEFAULT NAME 'ora_stage',

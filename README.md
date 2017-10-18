@@ -76,25 +76,25 @@ Prerequisites
 - The Oracle user used in the user mapping must have privileges to read
   the following Oracle dictionary views:
 
-  - `ALL_CONS_COLUMNS`
-  - `ALL_CONSTRAINTS`
-  - `ALL_IND_COLUMNS`
-  - `ALL_IND_EXPRESSIONS`
-  - `ALL_INDEXES`
-  - `ALL_MVIEWS`
-  - `ALL_SEQUENCES`
-  - `ALL_TAB_COLUMNS`
-  - `ALL_TABLES`
-  - `ALL_USERS`
+  - `DBA_CONS_COLUMNS`
+  - `DBA_CONSTRAINTS`
+  - `DBA_IND_COLUMNS`
+  - `DBA_IND_EXPRESSIONS`
+  - `DBA_INDEXES`
+  - `DBA_MVIEWS`
+  - `DBA_SEQUENCES`
+  - `DBA_TAB_COLUMNS`
+  - `DBA_TABLES`
+  - `DBA_USERS`
 
   The above privileges are required for database migration.
 
   Additionally, `SELECT` privileges on the following dictionary views are
   required by some oth the views created by `create_oraviews`:
   
-  - `ALL_PROCEDURES`
-  - `ALL_SOURCE`
-  - `ALL_VIEWS`
+  - `DBA_PROCEDURES`
+  - `DBA_SOURCE`
+  - `DBA_VIEWS`
   - `DBA_TAB_PRIVS`
   - `DBA_COL_PRIVS`
 
@@ -163,33 +163,16 @@ Objects created by the extension
 
   Steps performed:
 
-  - Create the Oracle staging schema.
+  - Create staging schemas for Oracle and PostgreSQL data.
 
-  - Call `create_oraviews` to create the metadata views there.
+  - Call `create_oraviews` to create the metadata in the Oracle stage.
 
-  - Create all the destination schemas for the migration.
-
-  - Use `IMPORT FOREIGN SCHEMA` to create foreign tables in the
-    destination schemas.
-
-  - Create sequences in the destination schemas.
+  - Create tables in the PostgreSQL stage and fill them with values from
+    the views in the Oracle stage.  Names and data types will be
+    translated wherever possible.
 
   The return value is the number of captured errors that have been turned
   into warnings.
-
-- Function `oracle_migrate_pgstage`:
-
-  Creates a second staging schema and fills it with data from
-  the Oracle staging schema.
-
-  The parameters are:
-
-  - `staging_schema` (default `ora_staging`): Oracle staging schema created
-    with `oracle_migrate_prepare`.
-
-  - `pgstage_schema` (default `pgsql_staging`): The name of a schema that
-    will be created and populated with tables containing PostgreSQL metadata.
-    This schema will be dropped after the migration is completed.
 
 - Function `oracle_materialize`:
 
@@ -212,8 +195,8 @@ Objects created by the extension
 
   The parameters are:
 
-  - `staging_schema` (default `ora_staging`): The name of the staging
-    schema created by `oracle_migrate_prepare`.
+  - `pgstage_schema` (default `pgsql_staging`): The name of the PostgreSQL stage
+    created by `oracle_migrate_prepare`.
 
   - `only_schemas` (default NULL): An array of Oracle schema names
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
@@ -230,7 +213,7 @@ Objects created by the extension
 
   The parameters are:
 
-  - `staging_schema` (default `ora_staging`): The name of the staging
+  - `pgstage_schema` (default `pgsql_staging`): The name of the staging
     schema created by `oracle_migrate_prepare`.
 
   - `only_schemas` (default NULL): An array of Oracle schema names
@@ -243,7 +226,7 @@ Objects created by the extension
 
 - Function `oracle_migrate_finish`:
 
-  Drops the staging schema.
+  Drops the staging schemas.
 
   Parameter:
 
@@ -292,6 +275,11 @@ Objects created by the extension
   - `sequences`: Oracle sequences
   - `index_columns`: columns of Oracle indexes that do *not* belong
     to a constraint
+  - `schemas`: Oracle schemas
+  - `triggers`: Triggers on Oracle tables
+  - `packages`: definition and bodies of PL/SQL packages
+  - `table_privs`: privileges of users on tables
+  - `column_privs`: privileges of users on table columns
 
   Objects in Oracle system schemas will not be shown.
 
@@ -303,23 +291,33 @@ The main use of this extension is to migrate Oracle databases to PostgreSQL.
 You can either perform the migration by calling `oracle_migrate`, or you do
 it step by step:
 
-  - Call `oracle_migrate_prepare` to create the staging schema with the
-    Oracle metadata views, the destination schemas and the foreign tables
-    and sequences.
+- Call `oracle_migrate_prepare` to create the Oracle staging schema with the
+  Oracle metadata views and the PostgreSQL staging schema with metadata
+  copied and translated from the Oracle stage.
 
-  - Call `oracle_migrate_tables` to replace the foreign tables with normal
-    tables and migrate the contents from Oracle.
+- After this step, you can modify the data in the PostgreSQL stage, from which
+  the PostgreSQL tables are created.  This is useful if you want to modify
+  data types, indexes or constraints.
 
-    Alternatively, you can use `oracle_materialize` to do this step for
-    Each table individually. This has the advantage that you can
-    migrate several tables simultaneously in multiple database sessions,
-    which may speed up the migration process.
+  Be aware that you cannot rename the schema or table names, which are the
+  link between Oracle and PostgreSQL tables.
 
-  - Call `oracle_migrate_constraints` to migrate constraints and
-    indexes from Oracle.
+- Call `oracle_migrate_mkforeign` to create the PostgreSQL schemas,
+  and sequences and foreign tables.
 
-  - Call `oracle_migrate_finish` to remove the staging schema and complete
-    the migration.
+- Call `oracle_migrate_pull` to replace the foreign tables with real
+  tables and migrate the data from Oracle.
+
+  Alternatively, you can use `oracle_materialize` to do this step for
+  Each table individually. This has the advantage that you can
+  migrate several tables simultaneously in multiple database sessions,
+  which may speed up the migration process.
+
+- Call `oracle_migrate_constraints` to migrate constraints and
+  indexes from Oracle.
+
+- Call `oracle_migrate_finish` to remove the staging schemas and complete
+  the migration.
 
 Apart from migration, you can use the function `create_oraviews` to create
 foreign tables and views that allow convenient access to Oracle metadata
