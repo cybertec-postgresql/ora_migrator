@@ -37,26 +37,34 @@ will belong to this user:
 
     SELECT oracle_migrate('oracle');
 
-    NOTICE:  Creating staging schema ...
-    NOTICE:  Creating foreign tables for schema "LAURENZ"...
-    NOTICE:  Creating foreign tables for schema "SOCIAL"...
+    NOTICE:  Creating staging schemas "ora_stage" and "pgsql_stage" ...
+    NOTICE:  Creating Oracle metadata views in schema "ora_stage" ...
+    NOTICE:  Copy definitions to PostgreSQL staging schema "pgsql_stage" ...
+    NOTICE:  Creating schemas ...
     NOTICE:  Creating sequences ...
-    NOTICE:  Migrating table "laurenz"."department" ...
-    NOTICE:  Migrating table "laurenz"."employee" ...
-    NOTICE:  Migrating table "laurenz"."integers" ...
-    NOTICE:  Migrating table "laurenz"."log" ...
-    NOTICE:  Migrating table "social"."blog" ...
+    NOTICE:  Creating foreign tables ...
     NOTICE:  Migrating table "social"."email" ...
+    NOTICE:  Migrating table "social"."blog" ...
+    NOTICE:  Migrating table "laurenz"."xml" ...
+    WARNING:  Error loading table data for laurenz.xml
+    DETAIL:  column "xml" of foreign table "xml" cannot be converted to or from Oracle data type
+    NOTICE:  Migrating table "laurenz"."log" ...
+    NOTICE:  Migrating table "laurenz"."integers" ...
+    NOTICE:  Migrating table "laurenz"."employee" ...
+    NOTICE:  Migrating table "laurenz"."department" ...
     NOTICE:  Creating UNIQUE and PRIMARY KEY constraints ...
+    WARNING:  Error creating primary key or unique constraint on table laurenz.xml
+    DETAIL:  relation "laurenz.xml" does not exist
     NOTICE:  Creating FOREIGN KEY constraints ...
     NOTICE:  Creating CHECK constraints ...
     NOTICE:  Creating indexes ...
-    NOTICE:  Dropping staging schema ...
-    NOTICE:  Migration completed.
+    NOTICE:  Setting column default values ...
+    NOTICE:  Dropping staging schemas ...
+    NOTICE:  Migration completed with 2 errors.
     DEBUG:  oracle_fdw: commit remote transaction
-     oracle_migrate
+     oracle_migrate 
     ----------------
-
+                  2
     (1 row)
 
 Prerequisites
@@ -132,12 +140,12 @@ Objects created by the extension
     to PostgreSQL.  
     You must have the `USAGE` privilege on that server.
 
-  - `staging_schema` (default `ora_staging`): The name of a schema that
+  - `staging_schema` (default `ora_stage`): The name of a schema that
     will be created for objects used during the migration
     (specifically, the objects created by `create_oraviews`).
     This schema will be dropped after the migration is completed.
 
-  - `pgstage_schema` (default `pgsql_staging`): The name of a schema that
+  - `pgstage_schema` (default `pgsql_stage`): The name of a schema that
     will be created for tables containing PostgreSQL metadata.
     This schema will be dropped after the migration is completed.
 
@@ -174,6 +182,23 @@ Objects created by the extension
   The return value is the number of captured errors that have been turned
   into warnings.
 
+- Function `oracle_migrate_mkforeign`:
+
+  Performs the second step of `oracle_migrate`.
+
+  The parameters are the same as for `oracle_migrate`.
+
+  Steps performed:
+
+  - Create the destination schemas in the PostgreSQL database.
+
+  - Create sequences in the destination schemas.
+
+  - Create foreign tables in the destination schemas.
+
+  The return value is the number of captured errors that have been turned
+  into warnings.
+
 - Function `oracle_materialize`:
 
   Replaces a foreign table with a real table and migrates the contents.  
@@ -190,12 +215,15 @@ Objects created by the extension
 
 - Function `oracle_migrate_tables`:
 
-  Calls `oracle_materialize` for all foreign tables in a migrated schemas
+  Calls `oracle_materialize` for all foreign tables in the migrated schemas
   to replace them with real tables.
 
   The parameters are:
 
-  - `pgstage_schema` (default `pgsql_staging`): The name of the PostgreSQL stage
+  - `staging_schema` (default `ora_stage`): The name of the Oracle stage
+    created by `oracle_migrate_prepare`.
+
+  - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
     created by `oracle_migrate_prepare`.
 
   - `only_schemas` (default NULL): An array of Oracle schema names
@@ -213,7 +241,7 @@ Objects created by the extension
 
   The parameters are:
 
-  - `pgstage_schema` (default `pgsql_staging`): The name of the staging
+  - `pgstage_schema` (default `pgsql_stage`): The name of the staging
     schema created by `oracle_migrate_prepare`.
 
   - `only_schemas` (default NULL): An array of Oracle schema names
@@ -230,10 +258,10 @@ Objects created by the extension
 
   Parameter:
 
-  - `staging_schema` (default `ora_staging`): The name of the Oracle staging
+  - `staging_schema` (default `ora_stage`): The name of the Oracle staging
     schema created by `oracle_migrate_prepare`.
 
-  - `pgstage_schema` (default `pgsql_staging`): The name of the PostgreSQL
+  - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL
     staging schema created by `oracle_migrate_pgschema`.
 
   The return value is the number of captured errors that have been turned
@@ -302,15 +330,15 @@ it step by step:
   Be aware that you cannot rename the schema or table names, which are the
   link between Oracle and PostgreSQL tables.
 
-- Call `oracle_migrate_mkforeign` to create the PostgreSQL schemas,
+- Call `oracle_migrate_mkforeign` to create the PostgreSQL schemas
   and sequences and foreign tables.
 
-- Call `oracle_migrate_pull` to replace the foreign tables with real
+- Call `oracle_migrate_tables` to replace the foreign tables with real
   tables and migrate the data from Oracle.
 
   Alternatively, you can use `oracle_materialize` to do this step for
   Each table individually. This has the advantage that you can
-  migrate several tables simultaneously in multiple database sessions,
+  migrate several tables in parallel in multiple database sessions,
   which may speed up the migration process.
 
 - Call `oracle_migrate_constraints` to migrate constraints and

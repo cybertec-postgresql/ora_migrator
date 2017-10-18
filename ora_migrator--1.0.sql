@@ -565,7 +565,7 @@ BEGIN
    EXECUTE format('SET LOCAL search_path = %I', extschema);
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-   RAISE NOTICE 'Creating staging schemas ...';
+   RAISE NOTICE 'Creating staging schemas "%" and "%" ...', staging_schema, pgstage_schema;
    SET LOCAL client_min_messages = warning;
 
    /* create Oracle staging schema */
@@ -592,7 +592,7 @@ BEGIN
    END;
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-   RAISE NOTICE 'Creating Oracle metadata views ...';
+   RAISE NOTICE 'Creating Oracle metadata views in schema "%" ...', staging_schema;
    SET LOCAL client_min_messages = warning;
 
    /* create the migration views in the Oracle staging schema */
@@ -612,9 +612,10 @@ BEGIN
 
    /* open cursors for columns */
    OPEN c_col FOR
-      SELECT schema, table_name, column_name, position, type_name, type_schema,
-             length, precision, scale, nullable, default_value 
-      FROM columns
+      SELECT schema, table_name, c.column_name, c.position, c.type_name, c.type_schema,
+             c.length, c.precision, c.scale, c.nullable, c.default_value 
+      FROM columns c
+         JOIN tables t USING (schema, table_name)
       WHERE only_schemas IS NULL
          OR schema =ANY (only_schemas);
 
@@ -882,7 +883,7 @@ BEGIN
                    '          position,\n'
                    '          descend,\n'
                    '          is_expression,\n'
-                   '          CASE WHEN is_expression THEN lower(column_name) ELSE oracle_tolower(column_name) END\n'
+                   '          CASE WHEN is_expression THEN ''('' || lower(column_name) || '')'' ELSE oracle_tolower(column_name) END\n'
                    '   FROM %I.index_columns\n'
                    '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
@@ -1025,7 +1026,6 @@ $$DECLARE
    typ          text;
    pos          integer;
    nul          boolean;
-   def          text;
    fsch         text;
    ftab         text;
    o_fsch       text;
@@ -1048,6 +1048,9 @@ BEGIN
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
    RAISE NOTICE 'Creating schemas ...';
@@ -1110,7 +1113,7 @@ BEGIN
    o_tab := '';
    stmt := '';
    separator := '';
-   FOR sch, tab, colname, pos, typ, nul, def, fsch, ftab IN
+   FOR sch, tab, colname, pos, typ, nul, fsch, ftab IN
       EXECUTE format(
          E'SELECT pc.schema,\n'
           '       pc.table_name,\n'
@@ -1118,7 +1121,6 @@ BEGIN
           '       pc.position,\n'
           '       pc.type_name,\n'
           '       pc.nullable,\n'
-          '       pc.default_value,\n'
           '       oc.schema,\n'
           '       oc.table_name\n'
           'FROM columns pc\n'
@@ -1155,7 +1157,9 @@ BEGIN
          separator := '';
       END IF;
 
-      stmt := stmt || format(E'   %s%I %s\n', separator, colname, typ);
+      stmt := stmt || format(E'   %s%I %s%s\n',
+                             separator, colname, typ,
+                             CASE WHEN nul THEN '' ELSE ' NOT NULL' END);
       separator := ', ';
    END LOOP;
 
@@ -1203,16 +1207,32 @@ BEGIN
    /* make the output less verbose */
    SET LOCAL client_min_messages = warning;
 
-   /* set "search_path" to the extension schema */
+   /* set "search_path" to the Oracle stage and the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I', extschema);
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
 
-   /* turn that foreign table into a real table */
-   IF NOT oracle_materialize(sch, tab) THEN
-      rc := rc + 1;
-   END IF;
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+
+   /* loop through all foreign tables to be migrated */
+   FOR sch, tab IN
+      SELECT schema, table_name FROM tables
+      WHERE only_schemas IS NULL
+         OR schema =ANY (only_schemas)
+   LOOP
+      EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+      RAISE NOTICE 'Migrating table "%"."%" ...', sch, tab;
+      SET LOCAL client_min_messages = warning;
+
+      /* turn that foreign table into a real table */
+      IF NOT oracle_materialize(sch, tab) THEN
+         rc := rc + 1;
+         /* remove the foreign table if it failed */
+         EXECUTE format('DROP FOREIGN TABLE %I.%I', sch, tab);
+      END IF;
+   END LOOP;
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
@@ -1223,7 +1243,7 @@ END;$$;
 COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[]) IS 'third step of "oracle_migrate": copy tables from Oracle';
 
 CREATE FUNCTION oracle_migrate_constraints(
-   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
    only_schemas   name[]  DEFAULT NULL
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
@@ -1262,11 +1282,14 @@ BEGIN
    /* make the output less verbose */
    SET LOCAL client_min_messages = warning;
 
-   /* set "search_path" to the staging schema and the extension schema */
+   /* set "search_path" to the PostgreSQL staging schema and the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I, %I', staging_schema, extschema);
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
    RAISE NOTICE 'Creating UNIQUE and PRIMARY KEY constraints ...';
@@ -1293,16 +1316,14 @@ BEGIN
                   /* turn the error into a warning */
                   GET STACKED DIAGNOSTICS
                      errmsg := MESSAGE_TEXT;
-                  RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
-                                oracle_tolower(old_s), oracle_tolower(old_t)
+                  RAISE WARNING 'Error creating primary key or unique constraint on table %.%', old_s, old_t
                      USING DETAIL = errmsg;
 
                   rc := rc + 1;
             END;
          END IF;
 
-         stmt := format('ALTER TABLE %I.%I ADD %s (',
-                        oracle_tolower(loc_s), oracle_tolower(loc_t),
+         stmt := format('ALTER TABLE %I.%I ADD %s (', loc_s, loc_t,
                         CASE WHEN prim THEN 'PRIMARY KEY' ELSE 'UNIQUE' END);
          stmt_suffix := format(')%s DEFERRABLE INITIALLY %s',
                               CASE WHEN candefer THEN '' ELSE ' NOT' END,
@@ -1313,7 +1334,7 @@ BEGIN
          separator := '';
       END IF;
 
-      stmt := stmt || separator || format('%I', oracle_tolower(colname));
+      stmt := stmt || separator || format('%I', colname);
       separator := ', ';
    END LOOP;
 
@@ -1326,7 +1347,7 @@ BEGIN
             GET STACKED DIAGNOSTICS
                errmsg := MESSAGE_TEXT;
             RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
-                          oracle_tolower(old_s), oracle_tolower(old_t)
+                          old_s, old_t
                USING DETAIL = errmsg;
 
             rc := rc + 1;
@@ -1360,18 +1381,15 @@ BEGIN
                   /* turn the error into a warning */
                   GET STACKED DIAGNOSTICS
                      errmsg := MESSAGE_TEXT;
-                  RAISE WARNING 'Error creating foreign key constraint on table %.%',
-                                oracle_tolower(old_s), oracle_tolower(old_t)
+                  RAISE WARNING 'Error creating foreign key constraint on table %.%', old_s, old_t
                      USING DETAIL = errmsg;
 
                   rc := rc + 1;
             END;
          END IF;
 
-         stmt := format('ALTER TABLE %I.%I ADD FOREIGN KEY (',
-                        oracle_tolower(loc_s), oracle_tolower(loc_t));
-         stmt_middle := format(') REFERENCES %I.%I (',
-                               oracle_tolower(rem_s), oracle_tolower(rem_t));
+         stmt := format('ALTER TABLE %I.%I ADD FOREIGN KEY (', loc_s, loc_t);
+         stmt_middle := format(') REFERENCES %I.%I (', rem_s, rem_t);
          stmt_suffix := format(')%s DEFERRABLE INITIALLY %s',
                               CASE WHEN candefer THEN '' ELSE ' NOT' END,
                               CASE WHEN is_deferred THEN 'DEFERRED' ELSE 'IMMEDIATE' END);
@@ -1381,8 +1399,8 @@ BEGIN
          separator := '';
       END IF;
 
-      stmt := stmt || separator || format('%I', oracle_tolower(colname));
-      stmt_middle := stmt_middle || separator || format('%I', oracle_tolower(rem_colname));
+      stmt := stmt || separator || format('%I', colname);
+      stmt_middle := stmt_middle || separator || format('%I', rem_colname);
       separator := ', ';
    END LOOP;
 
@@ -1394,8 +1412,7 @@ BEGIN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
                errmsg := MESSAGE_TEXT;
-            RAISE WARNING 'Error creating foreign key constraint on table %.%',
-                          oracle_tolower(old_s), oracle_tolower(old_t)
+            RAISE WARNING 'Error creating foreign key constraint on table %.%', old_s, old_t
                USING DETAIL = errmsg;
 
             rc := rc + 1;
@@ -1410,20 +1427,17 @@ BEGIN
    FOR loc_s, loc_t, cons_name, candefer, is_deferred, expr IN
       SELECT schema, table_name, constraint_name, "deferrable", deferred, condition
          FROM checks
-      WHERE (only_schemas IS NULL
-         OR schema =ANY (only_schemas))
-        AND condition !~ e'^"[^"]*" IS NOT NULL$'
+      WHERE only_schemas IS NULL
+         OR schema =ANY (only_schemas)
    LOOP
       BEGIN
-         EXECUTE format('ALTER TABLE %I.%I ADD CHECK(%s)',
-                       oracle_tolower(loc_s), oracle_tolower(loc_t), oracle_tolower(expr));
+         EXECUTE format('ALTER TABLE %I.%I ADD CHECK(%s)', loc_s, loc_t, expr);
       EXCEPTION
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
                errmsg := MESSAGE_TEXT;
-            RAISE WARNING 'Error creating CHECK constraint on table %.% with expression "%"',
-                          oracle_tolower(loc_s), oracle_tolower(loc_t), oracle_tolower(expr)
+            RAISE WARNING 'Error creating CHECK constraint on table %.% with expression "%"', loc_s, loc_t, expr
                USING DETAIL = errmsg;
 
             rc := rc + 1;
@@ -1462,8 +1476,7 @@ BEGIN
          END IF;
 
          stmt := format('CREATE %sINDEX ON %I.%I (',
-                        CASE WHEN uniq THEN 'UNIQUE ' ELSE '' END,
-                        oracle_tolower(loc_s), oracle_tolower(loc_t));
+                        CASE WHEN uniq THEN 'UNIQUE ' ELSE '' END, loc_s, loc_t);
          old_s := loc_s;
          old_t := loc_t;
          old_c := ind_name;
@@ -1471,12 +1484,8 @@ BEGIN
       END IF;
 
       /* fold expressions to lower case */
-      stmt := stmt || separator
-                   || CASE WHEN is_expr
-                           THEN '(' || lower(expr) || ')'
-                           ELSE quote_ident(oracle_tolower(expr))
-                      END
-                   || ' ' || CASE WHEN des THEN 'DESC' ELSE 'ASC' END;
+      stmt := stmt || separator || expr
+                   || CASE WHEN des THEN ' DESC' ELSE ' ASC' END;
       separator := ', ';
    END LOOP;
 
@@ -1507,23 +1516,16 @@ BEGIN
          OR schema =ANY (only_schemas))
         AND default_value IS NOT NULL
    LOOP
-      expr := replace(replace(lower(expr),
-                              'sysdate',
-                              'current_date'),
-                      'systimestamp',
-                      'current_timestamp');
-
       BEGIN
          EXECUTE format('ALTER TABLE %I.%I ALTER %I SET DEFAULT %s',
-                        oracle_tolower(loc_s), oracle_tolower(loc_t),
-                        oracle_tolower(colname), expr);
+                        loc_s, loc_t, colname, expr);
       EXCEPTION
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
                errmsg := MESSAGE_TEXT;
             RAISE WARNING 'Error setting default value on % of table %.% to "%"',
-                          oracle_tolower(colname), oracle_tolower(loc_s), oracle_tolower(loc_t), expr
+                          colname, loc_s, loc_t, expr
                USING DETAIL = errmsg;
 
             rc := rc + 1;
@@ -1585,27 +1587,26 @@ BEGIN
    /*
     * First step:
     * Create staging schema and define the oracle metadata views there.
-    * Create the destination schemas and the foreign tables and sequences there.
     */
-   rc := rc + oracle_migrate_prepare(server, staging_schema, only_schemas, max_long);
+   rc := rc + oracle_migrate_prepare(server, staging_schema, pgstage_schema, only_schemas, max_long);
 
    /*
     * Second step:
-    * Create a PostgreSQL staging schema and populate it with data copied from the Oracle stage.
+    * Create the destination schemas and the foreign tables and sequences there.
     */
-   rc := rc + oracle_migrate_pgstage(staging_schema, pgstage_schema);
+   rc := rc + oracle_migrate_mkforeign(server, staging_schema, pgstage_schema, only_schemas);
 
    /*
     * Third step:
     * Copy the tables over from Oracle.
     */
-   rc := rc + oracle_migrate_tables(pgstage_schema, only_schemas);
+   rc := rc + oracle_migrate_tables(staging_schema, pgstage_schema, only_schemas);
 
    /*
     * Fourth step:
     * Create constraints and indexes.
     */
-   rc := rc + oracle_migrate_constraints(staging_schema, only_schemas);
+   rc := rc + oracle_migrate_constraints(pgstage_schema, only_schemas);
 
    /*
     * Final step:
