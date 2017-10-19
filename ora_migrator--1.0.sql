@@ -774,8 +774,7 @@ BEGIN
                    '   WHERE ($1 IS NULL OR schema =ANY ($1) AND remote_schema =ANY ($1))',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE foreign_keys ADD PRIMARY KEY (schema, table_name, constraint_name);
-   ALTER TABLE foreign_keys ADD UNIQUE (schema, table_name, constraint_name, position);
+   ALTER TABLE foreign_keys ADD PRIMARY KEY (schema, table_name, constraint_name, position);
 
    /* copy "keys" table */
    CREATE TABLE keys (
@@ -801,8 +800,7 @@ BEGIN
                    '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE keys ADD PRIMARY KEY (schema, table_name, constraint_name);
-   ALTER TABLE keys ADD UNIQUE (schema, table_name, constraint_name, position);
+   ALTER TABLE keys ADD PRIMARY KEY (schema, table_name, constraint_name, position);
 
    /* copy "views" table */
    CREATE TABLE views (
