@@ -485,6 +485,7 @@ CREATE FUNCTION oracle_materialize(
 $$DECLARE
    ft     name;
    errmsg text;
+   detail text;
 BEGIN
    BEGIN
       /* rename the foreign table */
@@ -503,9 +504,10 @@ BEGIN
       WHEN others THEN
          /* turn the error into a warning */
          GET STACKED DIAGNOSTICS
-            errmsg := MESSAGE_TEXT;
+            errmsg := MESSAGE_TEXT,
+            detail := PG_EXCEPTION_DETAIL;
          RAISE WARNING 'Error loading table data for %.%', s, t
-            USING DETAIL = errmsg;
+            USING DETAIL = errmsg || coalesce(': ' || detail, '');
    END;
 
    RETURN FALSE;
@@ -1035,6 +1037,7 @@ $$DECLARE
    separator    text;
    old_msglevel text;
    errmsg       text;
+   detail       text;
    rc           integer := 0;
 BEGIN
    /* remember old setting */
@@ -1068,9 +1071,10 @@ BEGIN
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT;
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating schema "%"', s
-               USING DETAIL = errmsg;
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
       END;
@@ -1095,9 +1099,10 @@ BEGIN
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT;
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating sequence "%"."%"', sch, seq
-               USING DETAIL = errmsg;
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
       END;
@@ -1140,9 +1145,10 @@ BEGIN
                WHEN others THEN
                   /* turn the error into a warning */
                   GET STACKED DIAGNOSTICS
-                     errmsg := MESSAGE_TEXT;
+                     errmsg := MESSAGE_TEXT,
+                     detail := PG_EXCEPTION_DETAIL;
                   RAISE WARNING 'Error creating foreign table "%"."%"', sch, tab
-                     USING DETAIL = errmsg;
+                     USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
                   rc := rc + 1;
             END;
@@ -1172,9 +1178,10 @@ BEGIN
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT;
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating foreign table "%"."%"', sch, tab
-               USING DETAIL = errmsg;
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
       END;
@@ -1273,6 +1280,7 @@ $$DECLARE
    des          boolean;
    is_expr      boolean;
    errmsg       text;
+   detail       text;
    old_msglevel text;
    rc           integer := 0;
 BEGIN
@@ -1314,9 +1322,10 @@ BEGIN
                WHEN others THEN
                   /* turn the error into a warning */
                   GET STACKED DIAGNOSTICS
-                     errmsg := MESSAGE_TEXT;
+                     errmsg := MESSAGE_TEXT,
+                     detail := PG_EXCEPTION_DETAIL;
                   RAISE WARNING 'Error creating primary key or unique constraint on table %.%', old_s, old_t
-                     USING DETAIL = errmsg;
+                     USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
                   rc := rc + 1;
             END;
@@ -1344,10 +1353,11 @@ BEGIN
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT;
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
                           old_s, old_t
-               USING DETAIL = errmsg;
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
       END;
@@ -1379,9 +1389,10 @@ BEGIN
                WHEN others THEN
                   /* turn the error into a warning */
                   GET STACKED DIAGNOSTICS
-                     errmsg := MESSAGE_TEXT;
+                     errmsg := MESSAGE_TEXT,
+                     detail := PG_EXCEPTION_DETAIL;
                   RAISE WARNING 'Error creating foreign key constraint on table %.%', old_s, old_t
-                     USING DETAIL = errmsg;
+                     USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
                   rc := rc + 1;
             END;
@@ -1410,9 +1421,10 @@ BEGIN
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT;
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating foreign key constraint on table %.%', old_s, old_t
-               USING DETAIL = errmsg;
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
       END;
@@ -1435,9 +1447,10 @@ BEGIN
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT;
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating CHECK constraint on table %.% with expression "%"', loc_s, loc_t, expr
-               USING DETAIL = errmsg;
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
       END;
@@ -1466,9 +1479,10 @@ BEGIN
                WHEN others THEN
                   /* turn the error into a warning */
                   GET STACKED DIAGNOSTICS
-                     errmsg := MESSAGE_TEXT;
+                     errmsg := MESSAGE_TEXT,
+                     detail := PG_EXCEPTION_DETAIL;
                   RAISE WARNING 'Error executing "%"', stmt || ')'
-                     USING DETAIL = errmsg;
+                     USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
                   rc := rc + 1;
             END;
@@ -1495,9 +1509,10 @@ BEGIN
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT;
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error executing "%"', stmt || ')'
-               USING DETAIL = errmsg;
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
       END;
@@ -1522,10 +1537,11 @@ BEGIN
          WHEN others THEN
             /* turn the error into a warning */
             GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT;
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error setting default value on % of table %.% to "%"',
                           colname, loc_s, loc_t, expr
-               USING DETAIL = errmsg;
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
       END;
