@@ -154,8 +154,18 @@ Objects created by the extension
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
 
-  - `max_long` (default 32767): The maximal length of view definitions,
-    `DEFAULT` and index expressions in Oracle.
+  - `max_long` (default 32767): The maximal length of `LONG` and `LONG RAW`
+    values in the Oracle database.  Apart from user data, this also applies
+    to view definitions, column default expressions and index expressions.
+
+  Calling this function is equivalent to calling the following functions
+  in this order in a single transaction:
+
+  - `oracle_migrate_prepare`
+  - `oracle_migrate_mkforeign`
+  - `oracle_migrate_tables`
+  - `oracle_migrate_constraints`
+  - `oracle_migrate_finish`
 
   You need permissions to create schemas in the PostgreSQL database
   to use this function.
@@ -179,6 +189,9 @@ Objects created by the extension
     the views in the Oracle stage.  Names and data types will be
     translated wherever possible.
 
+  You need permissions to create schemas in the PostgreSQL database
+  to use this function.
+
   The return value is the number of captured errors that have been turned
   into warnings.
 
@@ -195,6 +208,9 @@ Objects created by the extension
   - Create sequences in the destination schemas.
 
   - Create foreign tables in the destination schemas.
+
+  You need permissions to create schemas in the PostgreSQL database
+  to use this function.
 
   The return value is the number of captured errors that have been turned
   into warnings.

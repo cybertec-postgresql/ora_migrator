@@ -1006,7 +1006,8 @@ CREATE FUNCTION oracle_migrate_mkforeign(
    server         name,
    staging_schema name    DEFAULT NAME 'ora_stage',
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
-   only_schemas   name[]  DEFAULT NULL
+   only_schemas   name[]  DEFAULT NULL,
+   max_long       integer DEFAULT 32767
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
@@ -1135,8 +1136,8 @@ BEGIN
          IF o_tab <> '' THEN
             BEGIN
                EXECUTE stmt || format(E') SERVER %I\n'
-                                       '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'')',
-                                      server, o_fsch, o_ftab);
+                                       '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'', max_long ''%s'')',
+                                      server, o_fsch, o_ftab, max_long);
             EXCEPTION
                WHEN others THEN
                   /* turn the error into a warning */
@@ -1167,8 +1168,8 @@ BEGIN
    IF o_tab <> '' THEN
       BEGIN
          EXECUTE stmt || format(E') SERVER %I\n'
-                                 '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'')',
-                                server, o_fsch, o_ftab);
+                                 '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'', max_long ''%s'')',
+                                server, o_fsch, o_ftab, max_long);
       EXCEPTION
          WHEN others THEN
             /* turn the error into a warning */
@@ -1187,7 +1188,7 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_mkforeign(name, name, name, name[]) IS 'second step of "oracle_migrate": create schemas, sequemces and foreign tables';
+COMMENT ON FUNCTION oracle_migrate_mkforeign(name, name, name, name[], integer) IS 'second step of "oracle_migrate": create schemas, sequemces and foreign tables';
 
 CREATE FUNCTION oracle_migrate_tables(
    staging_schema name    DEFAULT NAME 'ora_stage',
@@ -1594,7 +1595,7 @@ BEGIN
     * Second step:
     * Create the destination schemas and the foreign tables and sequences there.
     */
-   rc := rc + oracle_migrate_mkforeign(server, staging_schema, pgstage_schema, only_schemas);
+   rc := rc + oracle_migrate_mkforeign(server, staging_schema, pgstage_schema, only_schemas, max_long);
 
    /*
     * Third step:
