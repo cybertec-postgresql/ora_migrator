@@ -854,7 +854,7 @@ BEGIN
                    '          adjust_to_bigint(max_value),\n'
                    '          adjust_to_bigint(increment_by),\n'
                    '          cyclical,\n'
-                   '          cache_size,\n'
+                   '          GREATEST(cache_size, 1) AS cache_size,\n'
                    '          adjust_to_bigint(last_value)\n'
                    '   FROM %I.sequences\n'
                    '   WHERE $1 IS NULL OR schema =ANY ($1)',
