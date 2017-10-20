@@ -90,10 +90,12 @@ Prerequisites
   - `DBA_IND_EXPRESSIONS`
   - `DBA_INDEXES`
   - `DBA_MVIEWS`
+  - `DBA_MVIEW_LOGS`
   - `DBA_SEQUENCES`
   - `DBA_TAB_COLUMNS`
   - `DBA_TABLES`
   - `DBA_USERS`
+  - `DBA_VIEWS`
 
   The above privileges are required for database migration.
 
@@ -102,7 +104,6 @@ Prerequisites
   
   - `DBA_PROCEDURES`
   - `DBA_SOURCE`
-  - `DBA_VIEWS`
   - `DBA_TAB_PRIVS`
   - `DBA_COL_PRIVS`
 
@@ -306,7 +307,7 @@ Objects created by the extension
   - `schemas`: Oracle schemas
   - `checks`: Oracle ckeck constraints
   - `column_privs`: Privileges on Oracle table columns
-  - `columns`: columns of Oracle tables and views
+  - `columns`: columns of Oracle tables
   - `foreign_keys`: columns of Oracle foreign key constraints
   - `functions`: source code of Oracle functions and procedures
     (but not package or object definitions)

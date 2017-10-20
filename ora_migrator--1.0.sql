@@ -38,6 +38,9 @@ $$DECLARE
          '  AND (owner, table_name)\n'
          '     NOT IN (SELECT owner, mview_name\n'
          '             FROM dba_mviews)\n'
+         '  AND (owner, table_name)\n'
+         '     NOT IN (SELECT log_owner, log_table\n'
+         '             FROM dba_mview_logs)\n'
          '  AND owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -54,19 +57,34 @@ $$DECLARE
       '   nullable      boolean      NOT NULL,\n'
       '   default_value text\n'
       ') SERVER %I OPTIONS (table ''('
-         'SELECT owner,\n'
-         '       table_name,\n'
-         '       column_name,\n'
-         '       column_id,\n'
-         '       data_type,\n'
-         '       data_type_owner,\n'
-         '       char_length,\n'
-         '       data_precision,\n'
-         '       data_scale,\n'
-         '       CASE WHEN nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable,\n'
-         '       data_default\n'
-         'FROM dba_tab_columns\n'
-         'WHERE owner NOT IN (' || sys_schemas || E')'
+         'SELECT col.owner,\n'
+         '       col.table_name,\n'
+         '       col.column_name,\n'
+         '       col.column_id,\n'
+         '       col.data_type,\n'
+         '       col.data_type_owner,\n'
+         '       col.char_length,\n'
+         '       col.data_precision,\n'
+         '       col.data_scale,\n'
+         '       CASE WHEN col.nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable,\n'
+         '       col.data_default\n'
+         'FROM dba_tab_columns col\n'
+         '   JOIN dba_tables tab\n'
+         '      ON tab.owner = col.owner AND tab.table_name = col.table_name\n'
+         'WHERE (col.owner, col.table_name)\n'
+         '     NOT IN (SELECT owner, mview_name\n'
+         '             FROM dba_mviews)\n'
+         '  AND (col.owner, col.table_name)\n'
+         '     NOT IN (SELECT log_owner, log_table\n'
+         '             FROM dba_mview_logs)\n'
+         '  AND (col.owner, col.table_name)\n'
+         '     NOT IN (SELECT owner, view_name\n'
+         '             FROM dba_views)\n'
+         '  AND tab.temporary = ''''N''''\n'
+         '  AND tab.secondary = ''''N''''\n'
+         '  AND tab.nested    = ''''NO''''\n'
+         '  AND tab.dropped   = ''''NO''''\n'
+         '  AND col.owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    checks_sql text := E'CREATE FOREIGN TABLE %I.checks (\n'
@@ -77,18 +95,24 @@ $$DECLARE
       '   deferred        boolean      NOT NULL,\n'
       '   condition       text         NOT NULL\n'
       ') SERVER %I OPTIONS (table ''('
-         'SELECT owner,\n'
-         '       table_name,\n'
-         '       constraint_name,\n'
-         '       CASE WHEN deferrable = ''''DEFERRABLE'''' THEN 1 ELSE 0 END deferrable,\n'
-         '       CASE WHEN deferred   = ''''DEFERRED''''   THEN 1 ELSE 0 END deferred,\n'
-         '       search_condition\n'
-         'FROM dba_constraints\n'
-         'WHERE constraint_type = ''''C''''\n'
-         '  AND status          = ''''ENABLED''''\n'
-         '  AND validated       = ''''VALIDATED''''\n'
-         '  AND invalid         IS NULL\n'
-         '  AND owner NOT IN (' || sys_schemas || E')'
+         'SELECT con.owner,\n'
+         '       con.table_name,\n'
+         '       con.constraint_name,\n'
+         '       CASE WHEN con.deferrable = ''''DEFERRABLE'''' THEN 1 ELSE 0 END deferrable,\n'
+         '       CASE WHEN con.deferred   = ''''DEFERRED''''   THEN 1 ELSE 0 END deferred,\n'
+         '       con.search_condition\n'
+         'FROM dba_constraints con\n'
+         '   JOIN dba_tables tab\n'
+         '      ON tab.owner = con.owner AND tab.table_name = con.table_name\n'
+         'WHERE tab.temporary = ''''N''''\n'
+         '  AND tab.secondary = ''''N''''\n'
+         '  AND tab.nested    = ''''NO''''\n'
+         '  AND tab.dropped   = ''''NO''''\n'
+         '  AND con.constraint_type = ''''C''''\n'
+         '  AND con.status          = ''''ENABLED''''\n'
+         '  AND con.validated       = ''''VALIDATED''''\n'
+         '  AND con.invalid         IS NULL\n'
+         '  AND con.owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
    foreign_keys_sql text := E'CREATE FOREIGN TABLE %I.foreign_keys (\n'
@@ -117,9 +141,9 @@ $$DECLARE
          '       r_col.column_name AS remote_column\n'
          'FROM dba_constraints con\n'
          '   JOIN dba_cons_columns col\n'
-         '      ON (con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name)\n'
+         '      ON con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name\n'
          '   JOIN dba_cons_columns r_col\n'
-         '      ON (con.r_owner = r_col.owner AND con.r_constraint_name = r_col.constraint_name AND col.position = r_col.position)\n'
+         '      ON con.r_owner = r_col.owner AND con.r_constraint_name = r_col.constraint_name AND col.position = r_col.position\n'
          'WHERE con.constraint_type = ''''R''''\n'
          '  AND con.owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
@@ -142,10 +166,16 @@ $$DECLARE
          '       col.column_name,\n'
          '       col.position,\n'
          '       CASE WHEN con.constraint_type = ''''P'''' THEN 1 ELSE 0 END is_primary\n'
-         'FROM dba_constraints con\n'
+         'FROM dba_tables tab\n'
+         '   JOIN dba_constraints con\n'
+         '      ON tab.owner = con.owner AND tab.table_name = con.table_name\n'
          '   JOIN dba_cons_columns col\n'
-         '      ON (con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name)\n'
+         '      ON con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name\n'
          'WHERE con.constraint_type IN (''''P'''', ''''U'''')\n'
+         '  AND tab.temporary = ''''N''''\n'
+         '  AND tab.secondary = ''''N''''\n'
+         '  AND tab.nested    = ''''NO''''\n'
+         '  AND tab.dropped   = ''''NO''''\n'
          '  AND con.owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -614,10 +644,9 @@ BEGIN
 
    /* open cursors for columns */
    OPEN c_col FOR
-      SELECT schema, table_name, c.column_name, c.position, c.type_name, c.type_schema,
-             c.length, c.precision, c.scale, c.nullable, c.default_value 
-      FROM columns c
-         JOIN tables t USING (schema, table_name)
+      SELECT schema, table_name, column_name, position, type_name, type_schema,
+             length, precision, scale, nullable, default_value 
+      FROM columns
       WHERE only_schemas IS NULL
          OR schema =ANY (only_schemas);
 
