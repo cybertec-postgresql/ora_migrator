@@ -1101,7 +1101,7 @@ BEGIN
             GET STACKED DIAGNOSTICS
                errmsg := MESSAGE_TEXT,
                detail := PG_EXCEPTION_DETAIL;
-            RAISE WARNING 'Error creating sequence "%"."%"', sch, seq
+            RAISE WARNING 'Error creating sequence %.%', sch, seq
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
@@ -1147,7 +1147,7 @@ BEGIN
                   GET STACKED DIAGNOSTICS
                      errmsg := MESSAGE_TEXT,
                      detail := PG_EXCEPTION_DETAIL;
-                  RAISE WARNING 'Error creating foreign table "%"."%"', sch, tab
+                  RAISE WARNING 'Error creating foreign table %.%', sch, tab
                      USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
                   rc := rc + 1;
@@ -1180,7 +1180,7 @@ BEGIN
             GET STACKED DIAGNOSTICS
                errmsg := MESSAGE_TEXT,
                detail := PG_EXCEPTION_DETAIL;
-            RAISE WARNING 'Error creating foreign table "%"."%"', sch, tab
+            RAISE WARNING 'Error creating foreign table %.%', sch, tab
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
             rc := rc + 1;
@@ -1229,7 +1229,7 @@ BEGIN
          OR schema =ANY (only_schemas)
    LOOP
       EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-      RAISE NOTICE 'Migrating table "%"."%" ...', sch, tab;
+      RAISE NOTICE 'Migrating table %.% ...', sch, tab;
       SET LOCAL client_min_messages = warning;
 
       /* turn that foreign table into a real table */
