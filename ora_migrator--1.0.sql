@@ -145,6 +145,8 @@ $$DECLARE
          '   JOIN dba_cons_columns r_col\n'
          '      ON con.r_owner = r_col.owner AND con.r_constraint_name = r_col.constraint_name AND col.position = r_col.position\n'
          'WHERE con.constraint_type = ''''R''''\n'
+         '  AND con.status          = ''''ENABLED''''\n'
+         '  AND con.validated       = ''''VALIDATED''''\n'
          '  AND con.owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -171,7 +173,12 @@ $$DECLARE
          '      ON tab.owner = con.owner AND tab.table_name = con.table_name\n'
          '   JOIN dba_cons_columns col\n'
          '      ON con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name\n'
-         'WHERE con.constraint_type IN (''''P'''', ''''U'''')\n'
+         'WHERE (con.owner, con.table_name)\n'
+         '     NOT IN (SELECT owner, mview_name\n'
+         '             FROM dba_mviews)\n'
+         '  AND con.constraint_type IN (''''P'''', ''''U'''')\n'
+         '  AND con.status    = ''''ENABLED''''\n'
+         '  AND con.validated = ''''VALIDATED''''\n'
          '  AND tab.temporary = ''''N''''\n'
          '  AND tab.secondary = ''''N''''\n'
          '  AND tab.nested    = ''''NO''''\n'
