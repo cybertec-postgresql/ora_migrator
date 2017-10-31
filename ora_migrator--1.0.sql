@@ -296,8 +296,14 @@ $$DECLARE
       '       uniqueness,\n'
       '       position,\n'
       '       descend,\n'
-      '       col_expression IS NOT NULL AS is_expression,\n'
-      '       coalesce(col_expression, col_name) AS column_name\n'
+      '       col_expression IS NOT NULL\n'
+      '          AND (NOT descend OR col_expression !~ ''^"[^"]*"$'') AS is_expression,\n'
+      '       coalesce(\n'
+      '          CASE WHEN descend AND col_expression ~ ''^"[^"]*"$''\n'
+      '               THEN replace (col_expression, ''"'', '''')\n'
+      '               ELSE col_expression\n'
+      '          END,\n'
+      '          col_name) AS column_name\n'
       'FROM %I.index_exp\n';
 
    schemas_sql text := E'CREATE FOREIGN TABLE %I.schemas (\n'
