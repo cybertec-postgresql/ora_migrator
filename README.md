@@ -17,7 +17,7 @@ Cookbook
 
 A superuser sets the stage:
 
-    CREATE EXTENSION ora_migrator;
+    CREATE EXTENSION oracle_fdw;
 
     CREATE SERVER oracle FOREIGN DATA WRAPPER oracle_fdw
        OPTIONS (dbserver '//dbserver.mydomain.com/ORADB');
@@ -33,7 +33,7 @@ and Oracle user `orauser` has the `SELECT ANY DICTIONARY` privilege.
 Now we connect as `migrator` and perform the migration so that all objects
 will belong to this user:
 
-    CREATE EXTENSION oracle_fdw;
+    CREATE EXTENSION ora_migrator;
 
     SELECT oracle_migrate('oracle');
 
@@ -67,7 +67,7 @@ will belong to this user:
                   2
     (1 row)
 
-    DROP EXTENSION oracle_fdw;
+    DROP EXTENSION ora_migrator;
 
 Prerequisites
 =============
