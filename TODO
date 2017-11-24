@@ -1,0 +1,36 @@
+List of things to do
+====================
+
+Tables
+------
+
+- Add boolean flag "migrate" to pgsql_stage.tables.
+
+- Add Oracle column definition to pgsql_stage.columns
+
+Constraints
+-----------
+
+- Migrate only constraints for tables that are migrated.
+
+Sequences
+---------
+
+- Add column with the Oracle currval to pgsql_stage.sequences.
+
+Functions
+---------
+
+- Add a "state" column to pgsql_stage.functions
+
+- Create a function to migrate "verified" functions.
+
+Views
+-----
+
+- Extend pgsql_stage.columns and oracle_stage.columns to include view columns.
+  These should be used when migrating the views.
+
+- Add a "state" and the Oracle definition to pgsql_stage.views
+
+- Create a function to migrate "verified" views.
