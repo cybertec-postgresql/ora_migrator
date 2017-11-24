@@ -309,7 +309,7 @@ Objects created by the extension
   - `schemas`: Oracle schemas
   - `checks`: Oracle ckeck constraints
   - `column_privs`: Privileges on Oracle table columns
-  - `columns`: columns of Oracle tables
+  - `columns`: columns of Oracle tables and views
   - `foreign_keys`: columns of Oracle foreign key constraints
   - `functions`: source code of Oracle functions and procedures
     (but not package or object definitions)

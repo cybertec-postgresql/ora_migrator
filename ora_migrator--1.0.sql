@@ -77,9 +77,6 @@ $$DECLARE
          '  AND (col.owner, col.table_name)\n'
          '     NOT IN (SELECT log_owner, log_table\n'
          '             FROM dba_mview_logs)\n'
-         '  AND (col.owner, col.table_name)\n'
-         '     NOT IN (SELECT owner, view_name\n'
-         '             FROM dba_views)\n'
          '  AND tab.temporary = ''''N''''\n'
          '  AND tab.secondary = ''''N''''\n'
          '  AND tab.nested    = ''''NO''''\n'
@@ -668,12 +665,14 @@ BEGIN
 
    /* create PostgreSQL "columns" tables */
    CREATE TABLE columns(
-      schema        name    NOT NULL,
-      table_name    name    NOT NULL,
-      column_name   name    NOT NULL,
-      position      integer NOT NULL,
-      type_name     name    NOT NULL,
-      nullable      boolean NOT NULL,
+      schema        name         NOT NULL,
+      table_name    name         NOT NULL,
+      column_name   name         NOT NULL,
+      oracle_name   varchar(128) NOT NULL,
+      position      integer      NOT NULL,
+      type_name     name         NOT NULL,
+      oracle_type   varchar(128) NOT NULL,
+      nullable      boolean      NOT NULL,
       default_value text
    );
 
@@ -733,13 +732,15 @@ BEGIN
                       'current_timestamp');
 
       /* insert a row into the columns table */
-      INSERT INTO columns (schema, table_name, column_name, position, type_name, nullable, default_value)
+      INSERT INTO columns (schema, table_name, column_name, oracle_name, position, type_name, oracle_type, nullable, default_value)
          VALUES (
             oracle_tolower(v_schema),
             oracle_tolower(v_table),
             oracle_tolower(v_column),
+            v_column,
             v_pos,
             n_type,
+            v_type,
             v_nullable,
             expr
          );
@@ -753,12 +754,17 @@ BEGIN
 
    /* copy "tables" table */
    CREATE TABLE tables (
-      schema name NOT NULL,
-      table_name name
+      schema        name         NOT NULL,
+      oracle_schema varchar(128) NOT NULL,
+      table_name    name         NOT NULL,
+      oracle_name   varchar(128) NOT NULL,
+      migrate       boolean      NOT NULL DEFAULT TRUE
    );
-   EXECUTE format(E'INSERT INTO tables\n'
+   EXECUTE format(E'INSERT INTO tables (schema, oracle_schema, table_name, oracle_name)\n'
                    '   SELECT oracle_tolower(schema),\n'
-                   '          oracle_tolower(table_name)\n'
+                   '          schema,\n'
+                   '          oracle_tolower(table_name),\n'
+                   '          table_name\n'
                    '   FROM %I.tables\n'
                    '   WHERE $1 IS NULL OR schema =ANY ($1)',
                   staging_schema)
@@ -1161,20 +1167,19 @@ BEGIN
    separator := '';
    FOR sch, tab, colname, pos, typ, nul, fsch, ftab IN
       EXECUTE format(
-         E'SELECT pc.schema,\n'
-          '       pc.table_name,\n'
+         E'SELECT schema,\n'
+          '       table_name,\n'
           '       pc.column_name,\n'
           '       pc.position,\n'
           '       pc.type_name,\n'
           '       pc.nullable,\n'
-          '       oc.schema,\n'
-          '       oc.table_name\n'
+          '       pt.oracle_schema,\n'
+          '       pt.oracle_name\n'
           'FROM columns pc\n'
-          '   JOIN %I.columns oc\n'
-          '      ON pc.schema = oracle_tolower(oc.schema)\n'
-          '         AND pc.table_name = oracle_tolower(oc.table_name)\n'
-          '         AND pc.column_name = oracle_tolower(oc.column_name)\n'
-          'ORDER BY pc.schema, pc.table_name, pc.position',
+          '   JOIN tables pt\n'
+          '      USING (schema, table_name)\n'
+          'WHERE pt.migrate\n'
+          'ORDER BY schema, table_name, pc.position',
          staging_schema)
    LOOP
       IF o_sch <> sch OR o_tab <> tab THEN
@@ -1349,12 +1354,15 @@ BEGIN
    old_t := '';
    old_c := '';
    FOR loc_s, loc_t, cons_name, candefer, is_deferred, colname, colpos, prim IN
-      SELECT schema, table_name, constraint_name, "deferrable", deferred,
-             column_name, position, is_primary
-      FROM keys
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
-      ORDER BY schema, table_name, constraint_name, position
+      SELECT schema, table_name, k.constraint_name, k."deferrable", k.deferred,
+             k.column_name, k.position, k.is_primary
+      FROM keys k
+         JOIN tables t
+            USING (schema, table_name)
+      WHERE (only_schemas IS NULL
+         OR k.schema =ANY (only_schemas))
+        AND t.migrate
+      ORDER BY schema, table_name, k.constraint_name, k.position
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
          IF old_t <> '' THEN
@@ -1415,13 +1423,19 @@ BEGIN
    old_c := '';
    FOR loc_s, loc_t, cons_name, candefer, is_deferred, delrule,
        colname, colpos, rem_s, rem_t, rem_colname IN
-      SELECT schema, table_name, constraint_name, "deferrable", deferred, delete_rule,
-             column_name, position, remote_schema, remote_table, remote_column
-         FROM foreign_keys
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
-            AND remote_schema =ANY (only_schemas)
-      ORDER BY schema, table_name, constraint_name, position
+      SELECT fk.schema, fk.table_name, fk.constraint_name, fk."deferrable", fk.deferred, fk.delete_rule,
+             fk.column_name, fk.position, fk.remote_schema, fk.remote_table, fk.remote_column
+      FROM foreign_keys fk
+         JOIN tables tl
+            USING (schema, table_name)
+         JOIN tables tf
+            ON fk.remote_schema = tf.schema AND fk.remote_table = tf.table_name
+      WHERE (only_schemas IS NULL
+         OR fk.schema =ANY (only_schemas)
+            AND fk.remote_schema =ANY (only_schemas))
+        AND tl.migrate
+        AND tf.migrate
+      ORDER BY fk.schema, fk.table_name, fk.constraint_name, fk.position
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
          IF old_t <> '' THEN
@@ -1478,10 +1492,13 @@ BEGIN
 
    /* loop through all check constraints except NOT NULL checks */
    FOR loc_s, loc_t, cons_name, candefer, is_deferred, expr IN
-      SELECT schema, table_name, constraint_name, "deferrable", deferred, condition
-         FROM checks
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
+      SELECT schema, table_name, c.constraint_name, c."deferrable", c.deferred, c.condition
+      FROM checks c
+         JOIN tables t
+            USING (schema, table_name)
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND t.migrate
    LOOP
       BEGIN
          EXECUTE format('ALTER TABLE %I.%I ADD CHECK(%s)', loc_s, loc_t, expr);
@@ -1507,11 +1524,14 @@ BEGIN
    old_t := '';
    old_c := '';
    FOR loc_s, loc_t, ind_name, uniq, colpos, des, is_expr, expr IN
-      SELECT schema, table_name, index_name, uniqueness, position, descend, is_expression, column_name
-         FROM index_columns
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
-      ORDER BY schema, table_name, index_name, position
+      SELECT schema, table_name, i.index_name, i.uniqueness, i.position, i.descend, i.is_expression, i.column_name
+      FROM index_columns i
+         JOIN tables t
+            USING (schema, table_name)
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND t.migrate
+      ORDER BY schema, table_name, i.index_name, i.position
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> ind_name THEN
          IF old_t <> '' THEN
@@ -1566,11 +1586,14 @@ BEGIN
 
    /* loop through all default expressions */
    FOR loc_s, loc_t, colname, expr IN
-      SELECT schema, table_name, column_name, default_value
-      FROM columns
+      SELECT schema, table_name, c.column_name, c.default_value
+      FROM columns c
+         JOIN tables t
+            USING (schema, table_name)
       WHERE (only_schemas IS NULL
          OR schema =ANY (only_schemas))
-        AND default_value IS NOT NULL
+        AND t.migrate
+        AND c.default_value IS NOT NULL
    LOOP
       BEGIN
          EXECUTE format('ALTER TABLE %I.%I ALTER %I SET DEFAULT %s',
