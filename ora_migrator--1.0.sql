@@ -663,7 +663,7 @@ BEGIN
    /* set "search_path" to the PostgreSQL stage */
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
 
-   /* create PostgreSQL "columns" tables */
+   /* create PostgreSQL "columns" table */
    CREATE TABLE columns(
       schema        name         NOT NULL,
       table_name    name         NOT NULL,
@@ -780,7 +780,7 @@ BEGIN
       deferred        boolean NOT NULL,
       condition       text    NOT NULL
    );
-   EXECUTE format(E'INSERT INTO checks\n'
+   EXECUTE format(E'INSERT INTO checks (schema, table_name, constraint_name, "deferrable", deferred, condition)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
                    '          oracle_tolower(constraint_name),\n'
@@ -808,7 +808,8 @@ BEGIN
      remote_table    name    NOT NULL,
      remote_column   name    NOT NULL
    );
-   EXECUTE format(E'INSERT INTO foreign_keys\n'
+   EXECUTE format(E'INSERT INTO foreign_keys (schema, table_name, constraint_name, "deferrable", deferred, delete_rule,\n'
+                   '                          column_name, position, remote_schema, remote_table, remote_column)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
                    '          oracle_tolower(constraint_name),\n'
@@ -837,7 +838,7 @@ BEGIN
       position        integer  NOT NULL,
       is_primary      boolean  NOT NULL
    );
-   EXECUTE format(E'INSERT INTO keys\n'
+   EXECUTE format(E'INSERT INTO keys (schema, table_name, constraint_name, "deferrable", deferred, column_name, position, is_primary)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
                    '          oracle_tolower(constraint_name),\n'
@@ -858,7 +859,7 @@ BEGIN
       view_name  name NOT NULL,
       definition text NOT NULL
    );
-   EXECUTE format(E'INSERT INTO views\n'
+   EXECUTE format(E'INSERT INTO views (schema, view_name, definition)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(view_name),\n'
                    '          definition\n'
@@ -873,9 +874,11 @@ BEGIN
       schema         name    NOT NULL,
       function_name  name    NOT NULL,
       is_procedure   boolean NOT NULL,
-      source         text    NOT NULL
+      source         text    NOT NULL,
+      migrate        boolean NOT NULL DEFAULT FALSE,
+      verified       boolean NOT NULL DEFAULT FALSE
    );
-   EXECUTE format(E'INSERT INTO functions\n'
+   EXECUTE format(E'INSERT INTO functions (schema, function_name, is_procedure, source)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(function_name),\n'
                    '          is_procedure,\n'
@@ -898,7 +901,8 @@ BEGIN
       last_value    bigint  NOT NULL,
       oracle_value  bigint  NOT NULL
    );
-   EXECUTE format(E'INSERT INTO sequences\n'
+   EXECUTE format(E'INSERT INTO sequences (schema, sequence_name, min_value, max_value, increment_by,\n'
+                   '                       cyclical, cache_size, last_value, oracle_value)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(sequence_name),\n'
                    '          adjust_to_bigint(min_value),\n'
@@ -925,7 +929,7 @@ BEGIN
       is_expression boolean NOT NULL,
       column_name   text    NOT NULL
    );
-   EXECUTE format(E'INSERT INTO index_columns\n'
+   EXECUTE format(E'INSERT INTO index_columns (schema, table_name, index_name, uniqueness, position, descend, is_expression, column_name)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
                    '          oracle_tolower(index_name),\n'
@@ -944,7 +948,7 @@ BEGIN
    CREATE TABLE schemas (
       schema name NOT NULL
    );
-   EXECUTE format(E'INSERT INTO schemas\n'
+   EXECUTE format(E'INSERT INTO schemas (schema)\n'
                    '   SELECT oracle_tolower(schema)\n'
                    '   FROM %I.schemas\n'
                    '   WHERE $1 IS NULL OR schema =ANY ($1)',
@@ -964,7 +968,8 @@ BEGIN
       referencing_names name         NOT NULL,
       trigger_body      text         NOT NULL
    );
-   EXECUTE format(E'INSERT INTO triggers\n'
+   EXECUTE format(E'INSERT INTO triggers (schema, table_name, trigger_name, is_before, triggering_event,\n'
+                   '                      for_each_row, when_clause, referencing_names, trigger_body)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
                    '          oracle_tolower(trigger_name),\n'
@@ -987,7 +992,7 @@ BEGIN
       is_body      boolean NOT NULL,
       source       text    NOT NULL
    );
-   EXECUTE format(E'INSERT INTO packages\n'
+   EXECUTE format(E'INSERT INTO packages (schema, package_name, is_body, source)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(package_name),\n'
                    '          is_body,\n'
@@ -1007,7 +1012,7 @@ BEGIN
       grantee    name        NOT NULL,
       grantable  boolean     NOT NULL
    );
-   EXECUTE format(E'INSERT INTO table_privs\n'
+   EXECUTE format(E'INSERT INTO table_privs (schema, table_name, privilege, grantor, grantee, grantable)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
                    '          privilege,\n'
@@ -1030,7 +1035,7 @@ BEGIN
       grantee     name        NOT NULL,
       grantable   boolean     NOT NULL
    );
-   EXECUTE format(E'INSERT INTO column_privs\n'
+   EXECUTE format(E'INSERT INTO column_privs (schema, table_name, column_name, privilege, grantor, grantee, grantable)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
                    '          oracle_tolower(column_name),\n'
@@ -1622,6 +1627,67 @@ END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'third step of "oracle_migrate": create constraints and indexes';
 
+CREATE FUNCTION oracle_migrate_functions(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   sch          name;
+   fname        name;
+   src          text;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the Oracle stage and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+   FOR sch, fname, src IN
+      SELECT schema, function_name, source
+      FROM functions
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND migrate
+   LOOP
+      BEGIN
+         /* set "search_path" so that the function can be created without schema */
+         EXECUTE format('SET LOCAL search_path = %I', sch);
+
+         EXECUTE 'CREATE ' || src;
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating function %.%', sch, fname
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_functions(name, name[]) IS 'fourth step of "oracle_migrate": create functions';
+
 CREATE FUNCTION oracle_migrate_finish(
    staging_schema name    DEFAULT NAME 'ora_stage',
    pgstage_schema name    DEFAULT NAME 'pgsql_stage'
@@ -1689,6 +1755,12 @@ BEGIN
     * Create constraints and indexes.
     */
    rc := rc + oracle_migrate_constraints(pgstage_schema, only_schemas);
+
+   /*
+    * Fifth step:
+    * Create functions (this won't do anything since they have "migrate = FALSE").
+    */
+   rc := rc + oracle_migrate_functions(pgstage_schema, only_schemas);
 
    /*
     * Final step:
