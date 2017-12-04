@@ -69,7 +69,17 @@ $$DECLARE
          '       CASE WHEN col.nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable,\n'
          '       col.data_default\n'
          'FROM dba_tab_columns col\n'
-         '   JOIN dba_tables tab\n'
+         '   JOIN (SELECT owner, table_name\n'
+         '            FROM dba_tables\n'
+         '            WHERE owner NOT IN (' || sys_schemas || E')\n'
+         '              AND temporary = ''''N''''\n'
+         '              AND secondary = ''''N''''\n'
+         '              AND nested    = ''''NO''''\n'
+         '              AND dropped   = ''''NO''''\n'
+         '         UNION SELECT owner, view_name\n'
+         '            FROM dba_views\n'
+         '            WHERE owner NOT IN (' || sys_schemas || E')\n'
+         '        ) tab\n'
          '      ON tab.owner = col.owner AND tab.table_name = col.table_name\n'
          'WHERE (col.owner, col.table_name)\n'
          '     NOT IN (SELECT owner, mview_name\n'
@@ -77,10 +87,6 @@ $$DECLARE
          '  AND (col.owner, col.table_name)\n'
          '     NOT IN (SELECT log_owner, log_table\n'
          '             FROM dba_mview_logs)\n'
-         '  AND tab.temporary = ''''N''''\n'
-         '  AND tab.secondary = ''''N''''\n'
-         '  AND tab.nested    = ''''NO''''\n'
-         '  AND tab.dropped   = ''''NO''''\n'
          '  AND col.owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -855,13 +861,17 @@ BEGIN
 
    /* copy "views" table */
    CREATE TABLE views (
-      schema     name NOT NULL,
-      view_name  name NOT NULL,
-      definition text NOT NULL
+      schema     name    NOT NULL,
+      view_name  name    NOT NULL,
+      definition text    NOT NULL,
+      oracle_def text    NOT NULL,
+      migrate    boolean NOT NULL DEFAULT TRUE,
+      verified   boolean NOT NULL DEFAULT FALSE
    );
-   EXECUTE format(E'INSERT INTO views (schema, view_name, definition)\n'
+   EXECUTE format(E'INSERT INTO views (schema, view_name, definition, oracle_def)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(view_name),\n'
+                   '          definition,\n'
                    '          definition\n'
                    '   FROM %I.views\n'
                    '   WHERE $1 IS NULL OR schema =ANY ($1)',
@@ -1300,7 +1310,7 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[]) IS 'third step of "oracle_migrate": copy tables from Oracle';
+COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[]) IS 'fourth step of "oracle_migrate": copy tables from Oracle';
 
 CREATE FUNCTION oracle_migrate_constraints(
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
@@ -1686,7 +1696,87 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_functions(name, name[]) IS 'fourth step of "oracle_migrate": create functions';
+COMMENT ON FUNCTION oracle_migrate_functions(name, name[]) IS 'fifth step of "oracle_migrate": create functions';
+
+CREATE FUNCTION oracle_migrate_views(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   sch          name;
+   vname        name;
+   col          name;
+   src          text;
+   stmt         text;
+   separator    text;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the Oracle stage and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+   FOR sch, vname, src IN
+      SELECT schema, view_name, definition
+      FROM views
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND migrate
+   LOOP
+      stmt := format(E'CREATE VIEW %I.%I (', sch, vname);
+      separator := E'\n   ';
+      FOR col IN
+         SELECT column_name
+            FROM columns
+            WHERE schema = sch
+              AND table_name = vname
+            ORDER BY position
+      LOOP
+         stmt := stmt || separator || quote_ident(col);
+         separator := E',\n   ';
+      END LOOP;
+      stmt := stmt || E'\n) AS ' || src;
+
+      BEGIN
+         /* set "search_path" so that the function body can reference objects without schema */
+         EXECUTE format('SET LOCAL search_path = %I', sch);
+
+         EXECUTE stmt;
+
+         EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating view %.%', sch, vname
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_views(name, name[]) IS 'sixth step of "oracle_migrate": create views';
 
 CREATE FUNCTION oracle_migrate_finish(
    staging_schema name    DEFAULT NAME 'ora_stage',
@@ -1761,6 +1851,12 @@ BEGIN
     * Create functions (this won't do anything since they have "migrate = FALSE").
     */
    rc := rc + oracle_migrate_functions(pgstage_schema, only_schemas);
+
+   /*
+    * Sixth step:
+    * Create views.
+    */
+   rc := rc + oracle_migrate_views(pgstage_schema, only_schemas);
 
    /*
     * Final step:

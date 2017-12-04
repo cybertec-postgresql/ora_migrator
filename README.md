@@ -288,6 +288,23 @@ Objects created by the extension
   The return value is the number of captured errors that have been turned
   into warnings.
 
+- Function `oracle_migrate_views`:
+
+  Migrates views for which `migrate` has been set to `TRUE`.
+
+  The parameters are:
+
+  - `pgstage_schema` (default `pgsql_stage`): The name of the staging
+    schema created by `oracle_migrate_prepare`.
+
+  - `only_schemas` (default NULL): An array of Oracle schema names
+    that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
+    system schemas are processed.  
+    The names must be as they appear in Oracle, which is usually in upper case.
+
+  The return value is the number of captured errors that have been turned
+  into warnings.
+
 - Function `oracle_migrate_finish`:
 
   Drops the staging schemas.
@@ -387,6 +404,8 @@ it step by step:
   indexes from Oracle.
 
 - Call `oracle_migrate_functions` to migrate functions.
+
+- Call `oracle_migrate_views` to migrate functions.
 
 - Call `oracle_migrate_finish` to remove the staging schemas and complete
   the migration.

@@ -1,21 +1,4 @@
 List of things to do
 ====================
 
-Sequences
----------
-
-- Add column with the Oracle currval to pgsql_stage.sequences.
-
-Functions
----------
-
-- Add a "state" and the Oracle definition to pgsql_stage.functions.
-
-- Create a function to migrate "verified" functions.
-
-Views
------
-
-- Add a "state" and the Oracle definition to pgsql_stage.views.
-
-- Create a function to migrate "verified" views.
+There is nothing on the list currently.
