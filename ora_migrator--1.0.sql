@@ -895,7 +895,8 @@ BEGIN
       increment_by  bigint  NOT NULL,
       cyclical      boolean NOT NULL,
       cache_size    integer NOT NULL,
-      last_value    bigint  NOT NULL
+      last_value    bigint  NOT NULL,
+      oracle_value  bigint  NOT NULL
    );
    EXECUTE format(E'INSERT INTO sequences\n'
                    '   SELECT oracle_tolower(schema),\n'
@@ -905,6 +906,7 @@ BEGIN
                    '          adjust_to_bigint(increment_by),\n'
                    '          cyclical,\n'
                    '          GREATEST(cache_size, 1) AS cache_size,\n'
+                   '          adjust_to_bigint(last_value),\n'
                    '          adjust_to_bigint(last_value)\n'
                    '   FROM %I.sequences\n'
                    '   WHERE $1 IS NULL OR schema =ANY ($1)',
