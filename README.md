@@ -198,6 +198,18 @@ Objects created by the extension
   The return value is the number of captured errors that have been turned
   into warnings.
 
+- Function `oracle_migrate_refresh`:
+
+  Updates the tables in the PostgreSQL stage with the current values from
+  the Oracle database.  
+  This will only work if you didn't change the names of tables, columns
+  and other objects in the PostgreSQL stage.
+
+  The parameters are the same as for `oracle_migrate`.
+
+  The return value is the number of captured errors that have been turned
+  into warnings.
+
 - Function `oracle_migrate_mkforeign`:
 
   Performs the second step of `oracle_migrate`.
@@ -388,6 +400,9 @@ it step by step:
   have a boolean attribute `migrate` that should be set to `TRUE` to include
   the object in the migration.  Since functions will always require editing,
   the flag is initially set to `FALSE` for functions.
+
+  If the Oracle definitions change while you are working, you can refresh
+  the tables in the PostgreSQL stage with `oracle_migrate_refresh`.
 
 - Call `oracle_migrate_mkforeign` to create the PostgreSQL schemas
   and sequences and foreign tables.

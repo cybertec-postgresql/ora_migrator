@@ -561,7 +561,7 @@ END;$$;
 
 COMMENT ON FUNCTION oracle_materialize(name, name) IS 'turn an Oracle foreign table into a PostgreSQL table';
 
-CREATE FUNCTION oracle_migrate_prepare(
+CREATE FUNCTION oracle_migrate_refresh(
    server         name,
    staging_schema name    DEFAULT NAME 'ora_stage',
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
@@ -585,7 +585,7 @@ $$DECLARE
    v_nullable   boolean;
    v_default    text;
    n_type       text;
-   geom_type    text := 'text';
+   geom_type    text;
    expr         text;
 BEGIN
    /* remember old setting */
@@ -606,46 +606,6 @@ BEGIN
          RAISE;
    END;
 
-   /* set "search_path" to the extension schema */
-   SELECT extnamespace::regnamespace INTO extschema
-      FROM pg_catalog.pg_extension
-      WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I', extschema);
-
-   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-   RAISE NOTICE 'Creating staging schemas "%" and "%" ...', staging_schema, pgstage_schema;
-   SET LOCAL client_min_messages = warning;
-
-   /* create Oracle staging schema */
-   BEGIN
-      EXECUTE format('CREATE SCHEMA %I', staging_schema);
-   EXCEPTION
-      WHEN insufficient_privilege THEN
-         RAISE insufficient_privilege USING
-            MESSAGE = 'you do not have permission to create a schema in this database';
-      WHEN duplicate_schema THEN
-         RAISE duplicate_schema USING
-            MESSAGE = 'staging schema "' || staging_schema || '" already exists',
-            HINT = 'Drop the staging schema first or use a different one.';
-   END;
-
-   /* create PostgreSQL staging schema */
-   BEGIN
-      EXECUTE format('CREATE SCHEMA %I', pgstage_schema);
-   EXCEPTION
-      WHEN duplicate_schema THEN
-         RAISE duplicate_schema USING
-            MESSAGE = 'staging schema "' || pgstage_schema || '" already exists',
-            HINT = 'Drop the staging schema first or use a different one.';
-   END;
-
-   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-   RAISE NOTICE 'Creating Oracle metadata views in schema "%" ...', staging_schema;
-   SET LOCAL client_min_messages = warning;
-
-   /* create the migration views in the Oracle staging schema */
-   PERFORM create_oraviews(server, staging_schema, max_long);
-
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
    RAISE NOTICE 'Copy definitions to PostgreSQL staging schema "%" ...', pgstage_schema;
    SET LOCAL client_min_messages = warning;
@@ -654,6 +614,7 @@ BEGIN
    SELECT extnamespace::regnamespace::text || '.geometry' INTO geom_type
       FROM pg_catalog.pg_extension
       WHERE extname = 'postgis';
+   IF geom_type IS NULL THEN geom_type := 'text'; END IF;
 
    /* set "search_path" to the Oracle stage */
    EXECUTE format('SET LOCAL search_path = %I', staging_schema);
@@ -668,19 +629,6 @@ BEGIN
 
    /* set "search_path" to the PostgreSQL stage */
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
-
-   /* create PostgreSQL "columns" table */
-   CREATE TABLE columns(
-      schema        name         NOT NULL,
-      table_name    name         NOT NULL,
-      column_name   name         NOT NULL,
-      oracle_name   varchar(128) NOT NULL,
-      position      integer      NOT NULL,
-      type_name     name         NOT NULL,
-      oracle_type   varchar(128) NOT NULL,
-      nullable      boolean      NOT NULL,
-      default_value text
-   );
 
    /* loop through Oracle columns and translate them to PostgreSQL columns */
    LOOP
@@ -749,43 +697,29 @@ BEGIN
             v_type,
             v_nullable,
             expr
-         );
+         )
+         ON CONFLICT ON CONSTRAINT columns_pkey DO UPDATE SET 
+            oracle_name = EXCLUDED.oracle_name,
+            oracle_type = EXCLUDED.oracle_type;
    END LOOP;
 
    CLOSE c_col;
 
-   /* constraints for the "columns" table */
-   ALTER TABLE columns ADD PRIMARY KEY (schema, table_name, column_name);
-   ALTER TABLE columns ADD UNIQUE (schema, table_name, column_name, position);
-
    /* copy "tables" table */
-   CREATE TABLE tables (
-      schema        name         NOT NULL,
-      oracle_schema varchar(128) NOT NULL,
-      table_name    name         NOT NULL,
-      oracle_name   varchar(128) NOT NULL,
-      migrate       boolean      NOT NULL DEFAULT TRUE
-   );
    EXECUTE format(E'INSERT INTO tables (schema, oracle_schema, table_name, oracle_name)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          schema,\n'
                    '          oracle_tolower(table_name),\n'
                    '          table_name\n'
                    '   FROM %I.tables\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT tables_pkey DO UPDATE SET\n'
+                   '   oracle_schema = EXCLUDED.oracle_schema,\n'
+                   '   oracle_name   = EXCLUDED.oracle_name',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE tables ADD PRIMARY KEY (schema, table_name);
 
    /* copy "checks" table */
-   CREATE TABLE checks (
-      schema          name    NOT NULL,
-      table_name      name    NOT NULL,
-      constraint_name name    NOT NULL,
-      "deferrable"    boolean NOT NULL,
-      deferred        boolean NOT NULL,
-      condition       text    NOT NULL
-   );
    EXECUTE format(E'INSERT INTO checks (schema, table_name, constraint_name, "deferrable", deferred, condition)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
@@ -795,25 +729,15 @@ BEGIN
                    '          lower(condition)\n'
                    '   FROM %I.checks\n'
                    '   WHERE ($1 IS NULL OR schema =ANY ($1))\n'
-                   '     AND condition !~ ''^"[^"]*" IS NOT NULL$''',
+                   '     AND condition !~ ''^"[^"]*" IS NOT NULL$''\n'
+                   'ON CONFLICT ON CONSTRAINT checks_pkey DO UPDATE SET\n'
+                   '   "deferrable" = EXCLUDED."deferrable",\n'
+                   '   deferred     = EXCLUDED.deferred,\n'
+                   '   condition    = lower(EXCLUDED.condition)',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE checks ADD PRIMARY KEY (schema, table_name, constraint_name);
 
-  /* copy "foreign_keys" table */
-  CREATE TABLE foreign_keys (
-     schema          name    NOT NULL,
-     table_name      name    NOT NULL,
-     constraint_name name    NOT NULL,
-     "deferrable"    boolean NOT NULL,
-     deferred        boolean NOT NULL,
-     delete_rule     text    NOT NULL,
-     column_name     name    NOT NULL,
-     position        integer NOT NULL,
-     remote_schema   name    NOT NULL,
-     remote_table    name    NOT NULL,
-     remote_column   name    NOT NULL
-   );
+   /* copy "foreign_keys" table */
    EXECUTE format(E'INSERT INTO foreign_keys (schema, table_name, constraint_name, "deferrable", deferred, delete_rule,\n'
                    '                          column_name, position, remote_schema, remote_table, remote_column)\n'
                    '   SELECT oracle_tolower(schema),\n'
@@ -828,22 +752,19 @@ BEGIN
                    '          oracle_tolower(remote_table),\n'
                    '          oracle_tolower(remote_column)\n'
                    '   FROM %I.foreign_keys\n'
-                   '   WHERE ($1 IS NULL OR schema =ANY ($1) AND remote_schema =ANY ($1))',
+                   '   WHERE ($1 IS NULL OR schema =ANY ($1) AND remote_schema =ANY ($1))\n'
+                   'ON CONFLICT ON CONSTRAINT foreign_keys_pkey DO UPDATE SET\n'
+                   '   "deferrable"  = EXCLUDED."deferrable",\n'
+                   '   deferred      = EXCLUDED.deferred,\n'
+                   '   delete_rule   = EXCLUDED.delete_rule,\n'
+                   '   column_name   = oracle_tolower(EXCLUDED.column_name),\n'
+                   '   remote_schema = oracle_tolower(EXCLUDED.remote_schema),\n'
+                   '   remote_table  = oracle_tolower(EXCLUDED.remote_table),\n'
+                   '   remote_column = oracle_tolower(EXCLUDED.remote_column)',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE foreign_keys ADD PRIMARY KEY (schema, table_name, constraint_name, position);
 
    /* copy "keys" table */
-   CREATE TABLE keys (
-      schema          name     NOT NULL,
-      table_name      name     NOT NULL,
-      constraint_name name     NOT NULL,
-      "deferrable"    boolean  NOT NULL,
-      deferred        boolean  NOT NULL,
-      column_name     name     NOT NULL,
-      position        integer  NOT NULL,
-      is_primary      boolean  NOT NULL
-   );
    EXECUTE format(E'INSERT INTO keys (schema, table_name, constraint_name, "deferrable", deferred, column_name, position, is_primary)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
@@ -854,63 +775,44 @@ BEGIN
                    '          position,\n'
                    '          is_primary\n'
                    '   FROM %I.keys\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT keys_pkey DO UPDATE SET\n'
+                   '   "deferrable"  = EXCLUDED."deferrable",\n'
+                   '   deferred      = EXCLUDED.deferred,\n'
+                   '   column_name   = oracle_tolower(EXCLUDED.column_name),\n'
+                   '   is_primary    = EXCLUDED.is_primary',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE keys ADD PRIMARY KEY (schema, table_name, constraint_name, position);
 
    /* copy "views" table */
-   CREATE TABLE views (
-      schema     name    NOT NULL,
-      view_name  name    NOT NULL,
-      definition text    NOT NULL,
-      oracle_def text    NOT NULL,
-      migrate    boolean NOT NULL DEFAULT TRUE,
-      verified   boolean NOT NULL DEFAULT FALSE
-   );
    EXECUTE format(E'INSERT INTO views (schema, view_name, definition, oracle_def)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(view_name),\n'
                    '          definition,\n'
                    '          definition\n'
                    '   FROM %I.views\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT views_pkey DO UPDATE SET\n'
+                   '   oracle_def = EXCLUDED.definition',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE views ADD PRIMARY KEY (schema, view_name);
 
    /* copy "functions" view */
-   CREATE TABLE functions (
-      schema         name    NOT NULL,
-      function_name  name    NOT NULL,
-      is_procedure   boolean NOT NULL,
-      source         text    NOT NULL,
-      migrate        boolean NOT NULL DEFAULT FALSE,
-      verified       boolean NOT NULL DEFAULT FALSE
-   );
-   EXECUTE format(E'INSERT INTO functions (schema, function_name, is_procedure, source)\n'
+   EXECUTE format(E'INSERT INTO functions (schema, function_name, is_procedure, source, oracle_source)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(function_name),\n'
                    '          is_procedure,\n'
+                   '          source,\n'
                    '          source\n'
                    '   FROM %I.functions\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT functions_pkey DO UPDATE SET\n'
+                   '   is_procedure  = EXCLUDED.is_procedure,\n'
+                   '   oracle_source = EXCLUDED.source',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE functions ADD PRIMARY KEY (schema, function_name);
 
    /* copy "sequences" view */
-   CREATE TABLE sequences (
-      schema        name    NOT NULL,
-      sequence_name name    NOT NULL,
-      min_value     bigint,
-      max_value     bigint,
-      increment_by  bigint  NOT NULL,
-      cyclical      boolean NOT NULL,
-      cache_size    integer NOT NULL,
-      last_value    bigint  NOT NULL,
-      oracle_value  bigint  NOT NULL
-   );
    EXECUTE format(E'INSERT INTO sequences (schema, sequence_name, min_value, max_value, increment_by,\n'
                    '                       cyclical, cache_size, last_value, oracle_value)\n'
                    '   SELECT oracle_tolower(schema),\n'
@@ -923,22 +825,18 @@ BEGIN
                    '          adjust_to_bigint(last_value),\n'
                    '          adjust_to_bigint(last_value)\n'
                    '   FROM %I.sequences\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT sequences_pkey DO UPDATE SET\n'
+                   '   min_value    = EXCLUDED.min_value,\n'
+                   '   max_value    = EXCLUDED.max_value,\n'
+                   '   increment_by = EXCLUDED.increment_by,\n'
+                   '   cyclical     = EXCLUDED.cyclical,\n'
+                   '   cache_size   = EXCLUDED.cache_size,\n'
+                   '   oracle_value = EXCLUDED.oracle_value',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE sequences ADD PRIMARY KEY (schema, sequence_name);
 
    /* copy "index_columns" view */
-   CREATE TABLE index_columns (
-      schema        name NOT NULL,
-      table_name    name NOT NULL,
-      index_name    name NOT NULL,
-      uniqueness    boolean NOT NULL,
-      position      integer NOT NULL,
-      descend       boolean NOT NULL,
-      is_expression boolean NOT NULL,
-      column_name   text    NOT NULL
-   );
    EXECUTE format(E'INSERT INTO index_columns (schema, table_name, index_name, uniqueness, position, descend, is_expression, column_name)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
@@ -949,35 +847,26 @@ BEGIN
                    '          is_expression,\n'
                    '          CASE WHEN is_expression THEN ''('' || lower(column_name) || '')'' ELSE oracle_tolower(column_name) END\n'
                    '   FROM %I.index_columns\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT index_columns_pkey DO UPDATE SET\n'
+                   '   table_name    = EXCLUDED.table_name,\n'
+                   '   uniqueness    = EXCLUDED.uniqueness,\n'
+                   '   descend       = EXCLUDED.descend,\n'
+                   '   is_expression = EXCLUDED.is_expression,\n'
+                   '   column_name   = EXCLUDED.column_name',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE index_columns ADD PRIMARY KEY (schema, index_name, position);
 
    /* copy "schemas" table */
-   CREATE TABLE schemas (
-      schema name NOT NULL
-   );
    EXECUTE format(E'INSERT INTO schemas (schema)\n'
                    '   SELECT oracle_tolower(schema)\n'
                    '   FROM %I.schemas\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT DO NOTHING',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE schemas ADD PRIMARY KEY (schema);
 
    /* copy "triggers" view */
-   CREATE TABLE triggers (
-      schema            name         NOT NULL,
-      table_name        name         NOT NULL,
-      trigger_name      name         NOT NULL,
-      is_before         boolean      NOT NULL,
-      triggering_event  varchar(227) NOT NULL,
-      for_each_row      boolean      NOT NULL,
-      when_clause       text,
-      referencing_names name         NOT NULL,
-      trigger_body      text         NOT NULL
-   );
    EXECUTE format(E'INSERT INTO triggers (schema, table_name, trigger_name, is_before, triggering_event,\n'
                    '                      for_each_row, when_clause, referencing_names, trigger_body)\n'
                    '   SELECT oracle_tolower(schema),\n'
@@ -990,38 +879,31 @@ BEGIN
                    '          referencing_names,\n'
                    '          trigger_body\n'
                    '   FROM %I.triggers\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT triggers_pkey DO UPDATE SET\n'
+                   '   is_before         = EXCLUDED.is_before,\n'
+                   '   triggering_event  = EXCLUDED.triggering_event,\n'
+                   '   for_each_row      = EXCLUDED.for_each_row,\n'
+                   '   when_clause       = EXCLUDED.when_clause,\n'
+                   '   referencing_names = EXCLUDED.referencing_names,\n'
+                   '   trigger_body      = EXCLUDED.trigger_body',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE triggers ADD PRIMARY KEY (schema, table_name, trigger_name);
 
    /* copy "packages" view */
-   CREATE TABLE packages (
-      schema       name    NOT NULL,
-      package_name name    NOT NULL,
-      is_body      boolean NOT NULL,
-      source       text    NOT NULL
-   );
    EXECUTE format(E'INSERT INTO packages (schema, package_name, is_body, source)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(package_name),\n'
                    '          is_body,\n'
                    '          source\n'
                    '   FROM %I.packages\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT packages_pkey DO UPDATE SET\n'
+                   '   source  = EXCLUDED.source',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE packages ADD PRIMARY KEY (schema, package_name, is_body);
 
    /* copy "table_privs" table */
-   CREATE TABLE table_privs (
-      schema     name        NOT NULL,
-      table_name name        NOT NULL,
-      privilege  varchar(40) NOT NULL,
-      grantor    name        NOT NULL,
-      grantee    name        NOT NULL,
-      grantable  boolean     NOT NULL
-   );
    EXECUTE format(E'INSERT INTO table_privs (schema, table_name, privilege, grantor, grantee, grantable)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
@@ -1030,21 +912,14 @@ BEGIN
                    '          oracle_tolower(grantee),\n'
                    '          grantable\n'
                    '   FROM %I.table_privs\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT table_privs_pkey DO UPDATE SET\n'
+                   '   grantor   = EXCLUDED.grantor,\n'
+                   '   grantable = EXCLUDED.grantable',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE table_privs ADD PRIMARY KEY (schema, table_name, grantee, privilege);
 
    /* copy "column_privs" table */
-   CREATE TABLE column_privs (
-      schema      name        NOT NULL,
-      table_name  name        NOT NULL,
-      column_name name        NOT NULL,
-      privilege   varchar(40) NOT NULL,
-      grantor     name        NOT NULL,
-      grantee     name        NOT NULL,
-      grantable   boolean     NOT NULL
-   );
    EXECUTE format(E'INSERT INTO column_privs (schema, table_name, column_name, privilege, grantor, grantee, grantable)\n'
                    '   SELECT oracle_tolower(schema),\n'
                    '          oracle_tolower(table_name),\n'
@@ -1054,15 +929,268 @@ BEGIN
                    '          oracle_tolower(grantee),\n'
                    '          grantable\n'
                    '   FROM %I.column_privs\n'
-                   '   WHERE $1 IS NULL OR schema =ANY ($1)',
+                   '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
+                   'ON CONFLICT ON CONSTRAINT column_privs_pkey DO UPDATE SET\n'
+                   '   grantor   = EXCLUDED.grantor,\n'
+                   '   grantable = EXCLUDED.grantable',
                   staging_schema)
       USING only_schemas;
-   ALTER TABLE column_privs ADD PRIMARY KEY (schema, table_name, column_name, grantee, privilege);
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 
    RETURN 0;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_refresh(name, name, name, name[], integer) IS 'update the PostgreSQL stage with values from the Oracle stage';
+
+CREATE FUNCTION oracle_migrate_prepare(
+   server         name,
+   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL,
+   max_long       integer DEFAULT 32767
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   old_msglevel text;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* test if the foreign server can be used */
+   BEGIN
+      SELECT extnamespace::regnamespace INTO extschema
+         FROM pg_catalog.pg_extension
+         WHERE extname = 'oracle_fdw';
+      EXECUTE format('SET LOCAL search_path = %I', extschema);
+      PERFORM oracle_diag(server);
+   EXCEPTION
+      WHEN OTHERS THEN
+         RAISE WARNING 'Cannot establish connection with foreign server "%"', server;
+         RAISE;
+   END;
+
+   /* get the "ora_migrator" extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating staging schemas "%" and "%" ...', staging_schema, pgstage_schema;
+   SET LOCAL client_min_messages = warning;
+
+   /* create Oracle staging schema */
+   BEGIN
+      EXECUTE format('CREATE SCHEMA %I', staging_schema);
+   EXCEPTION
+      WHEN insufficient_privilege THEN
+         RAISE insufficient_privilege USING
+            MESSAGE = 'you do not have permission to create a schema in this database';
+      WHEN duplicate_schema THEN
+         RAISE duplicate_schema USING
+            MESSAGE = 'staging schema "' || staging_schema || '" already exists',
+            HINT = 'Drop the staging schema first or use a different one.';
+   END;
+
+   /* create PostgreSQL staging schema */
+   BEGIN
+      EXECUTE format('CREATE SCHEMA %I', pgstage_schema);
+   EXCEPTION
+      WHEN duplicate_schema THEN
+         RAISE duplicate_schema USING
+            MESSAGE = 'staging schema "' || pgstage_schema || '" already exists',
+            HINT = 'Drop the staging schema first or use a different one.';
+   END;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating Oracle metadata views in schema "%" ...', staging_schema;
+   SET LOCAL client_min_messages = warning;
+
+   /* create the migration views in the Oracle staging schema */
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+   PERFORM create_oraviews(server, staging_schema, max_long);
+
+   /* set "search_path" to the PostgreSQL stage */
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* create tables in the PostgreSQL stage */
+   CREATE TABLE columns(
+      schema        name         NOT NULL,
+      table_name    name         NOT NULL,
+      column_name   name         NOT NULL,
+      oracle_name   varchar(128) NOT NULL,
+      position      integer      NOT NULL,
+      type_name     name         NOT NULL,
+      oracle_type   varchar(128) NOT NULL,
+      nullable      boolean      NOT NULL,
+      default_value text,
+      CONSTRAINT columns_pkey
+         PRIMARY KEY (schema, table_name, column_name),
+      CONSTRAINT columns_unique
+         UNIQUE (schema, table_name, column_name, position)
+   );
+
+   CREATE TABLE tables (
+      schema        name         NOT NULL,
+      oracle_schema varchar(128) NOT NULL,
+      table_name    name         NOT NULL,
+      oracle_name   varchar(128) NOT NULL,
+      migrate       boolean      NOT NULL DEFAULT TRUE,
+      CONSTRAINT tables_pkey
+         PRIMARY KEY (schema, table_name)
+   );
+
+   CREATE TABLE checks (
+      schema          name    NOT NULL,
+      table_name      name    NOT NULL,
+      constraint_name name    NOT NULL,
+      "deferrable"    boolean NOT NULL,
+      deferred        boolean NOT NULL,
+      condition       text    NOT NULL,
+      CONSTRAINT checks_pkey
+         PRIMARY KEY (schema, table_name, constraint_name)
+   );
+
+   CREATE TABLE foreign_keys (
+      schema          name    NOT NULL,
+      table_name      name    NOT NULL,
+      constraint_name name    NOT NULL,
+      "deferrable"    boolean NOT NULL,
+      deferred        boolean NOT NULL,
+      delete_rule     text    NOT NULL,
+      column_name     name    NOT NULL,
+      position        integer NOT NULL,
+      remote_schema   name    NOT NULL,
+      remote_table    name    NOT NULL,
+      remote_column   name    NOT NULL,
+      CONSTRAINT foreign_keys_pkey
+         PRIMARY KEY (schema, table_name, constraint_name, position)
+   );
+
+   CREATE TABLE keys (
+      schema          name     NOT NULL,
+      table_name      name     NOT NULL,
+      constraint_name name     NOT NULL,
+      "deferrable"    boolean  NOT NULL,
+      deferred        boolean  NOT NULL,
+      column_name     name     NOT NULL,
+      position        integer  NOT NULL,
+      is_primary      boolean  NOT NULL,
+      CONSTRAINT keys_pkey
+         PRIMARY KEY (schema, table_name, constraint_name, position)
+   );
+
+   CREATE TABLE views (
+      schema     name    NOT NULL,
+      view_name  name    NOT NULL,
+      definition text    NOT NULL,
+      oracle_def text    NOT NULL,
+      migrate    boolean NOT NULL DEFAULT TRUE,
+      verified   boolean NOT NULL DEFAULT FALSE,
+      CONSTRAINT views_pkey
+         PRIMARY KEY (schema, view_name)
+   );
+
+   CREATE TABLE functions (
+      schema         name    NOT NULL,
+      function_name  name    NOT NULL,
+      is_procedure   boolean NOT NULL,
+      source         text    NOT NULL,
+      oracle_source  text    NOT NULL,
+      migrate        boolean NOT NULL DEFAULT FALSE,
+      verified       boolean NOT NULL DEFAULT FALSE,
+      CONSTRAINT functions_pkey
+         PRIMARY KEY (schema, function_name)
+   );
+
+   CREATE TABLE sequences (
+      schema        name    NOT NULL,
+      sequence_name name    NOT NULL,
+      min_value     bigint,
+      max_value     bigint,
+      increment_by  bigint  NOT NULL,
+      cyclical      boolean NOT NULL,
+      cache_size    integer NOT NULL,
+      last_value    bigint  NOT NULL,
+      oracle_value  bigint  NOT NULL,
+      CONSTRAINT sequences_pkey
+         PRIMARY KEY (schema, sequence_name)
+   );
+
+   CREATE TABLE index_columns (
+      schema        name NOT NULL,
+      table_name    name NOT NULL,
+      index_name    name NOT NULL,
+      uniqueness    boolean NOT NULL,
+      position      integer NOT NULL,
+      descend       boolean NOT NULL,
+      is_expression boolean NOT NULL,
+      column_name   text    NOT NULL,
+      CONSTRAINT index_columns_pkey
+         PRIMARY KEY (schema, index_name, position)
+   );
+
+   CREATE TABLE schemas (
+      schema name NOT NULL
+         CONSTRAINT schemas_pkey PRIMARY KEY
+   );
+
+   CREATE TABLE triggers (
+      schema            name         NOT NULL,
+      table_name        name         NOT NULL,
+      trigger_name      name         NOT NULL,
+      is_before         boolean      NOT NULL,
+      triggering_event  varchar(227) NOT NULL,
+      for_each_row      boolean      NOT NULL,
+      when_clause       text,
+      referencing_names name         NOT NULL,
+      trigger_body      text         NOT NULL,
+      CONSTRAINT triggers_pkey
+         PRIMARY KEY (schema, table_name, trigger_name)
+   );
+
+   CREATE TABLE packages (
+      schema       name    NOT NULL,
+      package_name name    NOT NULL,
+      is_body      boolean NOT NULL,
+      source       text    NOT NULL,
+      CONSTRAINT packages_pkey
+         PRIMARY KEY (schema, package_name, is_body)
+   );
+
+   CREATE TABLE table_privs (
+      schema     name        NOT NULL,
+      table_name name        NOT NULL,
+      privilege  varchar(40) NOT NULL,
+      grantor    name        NOT NULL,
+      grantee    name        NOT NULL,
+      grantable  boolean     NOT NULL,
+      CONSTRAINT table_privs_pkey
+         PRIMARY KEY (schema, table_name, grantee, privilege)
+   );
+
+   CREATE TABLE column_privs (
+      schema      name        NOT NULL,
+      table_name  name        NOT NULL,
+      column_name name        NOT NULL,
+      privilege   varchar(40) NOT NULL,
+      grantor     name        NOT NULL,
+      grantee     name        NOT NULL,
+      grantable   boolean     NOT NULL,
+      CONSTRAINT column_privs_pkey
+         PRIMARY KEY (schema, table_name, column_name, grantee, privilege)
+   );
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   /* copy data from the Oracle stage to the PostgreSQL stage */
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+   RETURN oracle_migrate_refresh(server, staging_schema, pgstage_schema, only_schemas, max_long);
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name, name[], integer) IS 'first step of "oracle_migrate": create and populate staging schemas';
