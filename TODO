@@ -1,4 +1,7 @@
 List of things to do
 ====================
 
-There is nothing on the list currently.
+- Support GENERATED AS IDENTITY with later Oracle versions.
+
+- Migrate triggers by defining a trigger function with the same name as
+  the trigger.
