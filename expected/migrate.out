@@ -1,0 +1,119 @@
+/*
+ * Test migration from Oracle.
+ *
+ * This requires that an Oracle database is running on the same
+ * machine, the test schema has been created with "ora_mktest.sql",
+ * ORACLE_SID and ORACLE_HOME are defined in the PostgreSQL server's
+ * environment and the Oracle library directory is in the
+ * library path.
+ */
+SET client_min_messages = WARNING;
+/* create a user to perform the migration */
+DROP ROLE IF EXISTS migrator;
+CREATE ROLE migrator LOGIN;
+/* create all requisite extensions */
+CREATE EXTENSION oracle_fdw;
+CREATE EXTENSION ora_migrator;
+/* create a foreign server and a user mapping */
+CREATE SERVER oracle FOREIGN DATA WRAPPER oracle_fdw
+   OPTIONS (dbserver '');
+CREATE USER MAPPING FOR PUBLIC SERVER oracle
+   OPTIONS (user 'testschema1', password 'good_password');
+/* give the user the required permissions */
+GRANT CREATE ON DATABASE contrib_regression TO migrator;
+GRANT USAGE ON FOREIGN SERVER oracle TO migrator;
+/* connect as migration user */
+\connect - migrator
+SET client_min_messages = WARNING;
+/* set up staging schemas */
+SELECT oracle_migrate_prepare(
+   server => 'oracle', 
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2'],
+   max_long => 1024
+);
+ oracle_migrate_prepare 
+------------------------
+                      0
+(1 row)
+
+/* edit some values in the staging schema */
+UPDATE pgsql_stage.triggers
+   SET trigger_body = replace(
+                         replace(trigger_body, ':NEW', 'NEW'),
+                         'USER',
+                         'current_user'
+                      )
+   WHERE schema = 'testschema1'
+     AND table_name = 'tab1'
+     AND trigger_name = 'tab1_trig';
+UPDATE pgsql_stage.functions SET migrate = TRUE;
+UPDATE pgsql_stage.functions
+   SET source = replace(
+                   replace(
+                      replace(source, 'RETURN DATE', 'RETURNS date'),
+                      'BEGIN',
+                      '$$BEGIN'
+                   ),
+                   'END;',
+                   'END;$$ LANGUAGE plpgsql'
+                )
+   WHERE schema = 'testschema1'
+     AND function_name = 'tomorrow';
+UPDATE pgsql_stage.triggers SET migrate = TRUE;
+/* perform the migration */
+SELECT oracle_migrate_mkforeign(
+   server => 'oracle', 
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2'],
+   max_long => 1024
+);
+ oracle_migrate_mkforeign 
+--------------------------
+                        0
+(1 row)
+
+SELECT oracle_migrate_tables(
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+ oracle_migrate_tables 
+-----------------------
+                     0
+(1 row)
+
+SELECT oracle_migrate_constraints(
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+ oracle_migrate_constraints 
+----------------------------
+                          0
+(1 row)
+
+SELECT oracle_migrate_functions(
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+ oracle_migrate_functions 
+--------------------------
+                        0
+(1 row)
+
+SELECT oracle_migrate_triggers(
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+ oracle_migrate_triggers 
+-------------------------
+                       0
+(1 row)
+
+SELECT oracle_migrate_views(
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+ oracle_migrate_views 
+----------------------
+                    0
+(1 row)
+
+SELECT oracle_migrate_finish();
+ oracle_migrate_finish 
+-----------------------
+                     0
+(1 row)
+
