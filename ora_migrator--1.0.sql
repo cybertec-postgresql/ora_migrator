@@ -1442,7 +1442,224 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[]) IS 'fourth step of "oracle_migrate": copy tables from Oracle';
+COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[]) IS 'third step of "oracle_migrate": copy tables from Oracle';
+
+CREATE FUNCTION oracle_migrate_functions(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog SET check_function_bodies = off AS
+$$DECLARE
+   extschema    name;
+   sch          name;
+   fname        name;
+   src          text;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the Oracle stage and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+   FOR sch, fname, src IN
+      SELECT schema, function_name, source
+      FROM functions
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND migrate
+   LOOP
+      BEGIN
+         /* set "search_path" so that the function can be created without schema */
+         EXECUTE format('SET LOCAL search_path = %I', sch);
+
+         EXECUTE 'CREATE ' || src;
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating function %.%', sch, fname
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_functions(name, name[]) IS 'fourth step of "oracle_migrate": create functions';
+
+CREATE FUNCTION oracle_migrate_triggers(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog SET check_function_bodies = off AS
+$$DECLARE
+   extschema    name;
+   sch          name;
+   tabname      name;
+   trigname     name;
+   bef          boolean;
+   event        text;
+   eachrow      boolean;
+   whencl       text;
+   ref          text;
+   src          text;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the Oracle stage and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+   FOR sch, tabname, trigname, bef, event, eachrow, whencl, ref, src IN
+      SELECT schema, table_name, trigger_name, is_before, triggering_event,
+             for_each_row, when_clause, referencing_names, trigger_body
+      FROM triggers
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND migrate
+   LOOP
+      BEGIN
+         /* create the trigger function */
+         EXECUTE format(E'CREATE FUNCTION %I.%I() RETURNS trigger LANGUAGE plpgsql AS\n$_f_$%s$_f_$',
+                        sch, trigname, src);
+         /* create the trigger itself */
+         EXECUTE format(E'CREATE TRIGGER %I %s %s ON %I.%I FOR EACH %s\n'
+                        '   EXECUTE PROCEDURE %I.%I()',
+                        trigname,
+                        CASE WHEN bef THEN 'BEFORE' ELSE 'AFTER' END,
+                        event,
+                        sch, tabname,
+                        CASE WHEN eachrow THEN 'ROW' ELSE 'STATEMENT' END,
+                        sch, trigname);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating trigger % on %.%', trigname, sch, tabname
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_triggers(name, name[]) IS 'fifth step of "oracle_migrate": create triggers';
+
+CREATE FUNCTION oracle_migrate_views(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   sch          name;
+   vname        name;
+   col          name;
+   src          text;
+   stmt         text;
+   separator    text;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the Oracle stage and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+   FOR sch, vname, src IN
+      SELECT schema, view_name, definition
+      FROM views
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND migrate
+   LOOP
+      stmt := format(E'CREATE VIEW %I.%I (', sch, vname);
+      separator := E'\n   ';
+      FOR col IN
+         SELECT column_name
+            FROM columns
+            WHERE schema = sch
+              AND table_name = vname
+            ORDER BY position
+      LOOP
+         stmt := stmt || separator || quote_ident(col);
+         separator := E',\n   ';
+      END LOOP;
+      stmt := stmt || E'\n) AS ' || src;
+
+      BEGIN
+         /* set "search_path" so that the function body can reference objects without schema */
+         EXECUTE format('SET LOCAL search_path = %I', sch);
+
+         EXECUTE stmt;
+
+         EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating view %.%', sch, vname
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_views(name, name[]) IS 'sixth step of "oracle_migrate": create views';
 
 CREATE FUNCTION oracle_migrate_constraints(
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
@@ -1767,224 +1984,7 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'third step of "oracle_migrate": create constraints and indexes';
-
-CREATE FUNCTION oracle_migrate_functions(
-   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
-   only_schemas   name[]  DEFAULT NULL
-) RETURNS integer
-   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
-$$DECLARE
-   extschema    name;
-   sch          name;
-   fname        name;
-   src          text;
-   errmsg       text;
-   detail       text;
-   old_msglevel text;
-   rc           integer := 0;
-BEGIN
-   /* remember old setting */
-   old_msglevel := current_setting('client_min_messages');
-   /* make the output less verbose */
-   SET LOCAL client_min_messages = warning;
-
-   /* set "search_path" to the Oracle stage and the extension schema */
-   SELECT extnamespace::regnamespace INTO extschema
-      FROM pg_catalog.pg_extension
-      WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
-
-   /* translate schema names to lower case */
-   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
-   FOR sch, fname, src IN
-      SELECT schema, function_name, source
-      FROM functions
-      WHERE (only_schemas IS NULL
-         OR schema =ANY (only_schemas))
-        AND migrate
-   LOOP
-      BEGIN
-         /* set "search_path" so that the function can be created without schema */
-         EXECUTE format('SET LOCAL search_path = %I', sch);
-
-         EXECUTE 'CREATE ' || src;
-      EXCEPTION
-         WHEN others THEN
-            /* turn the error into a warning */
-            GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT,
-               detail := PG_EXCEPTION_DETAIL;
-            RAISE WARNING 'Error creating function %.%', sch, fname
-               USING DETAIL = errmsg || coalesce(': ' || detail, '');
-
-            rc := rc + 1;
-      END;
-   END LOOP;
-
-   /* reset client_min_messages */
-   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-
-   RETURN rc;
-END;$$;
-
-COMMENT ON FUNCTION oracle_migrate_functions(name, name[]) IS 'fifth step of "oracle_migrate": create functions';
-
-CREATE FUNCTION oracle_migrate_triggers(
-   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
-   only_schemas   name[]  DEFAULT NULL
-) RETURNS integer
-   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
-$$DECLARE
-   extschema    name;
-   sch          name;
-   tabname      name;
-   trigname     name;
-   bef          boolean;
-   event        text;
-   eachrow      boolean;
-   whencl       text;
-   ref          text;
-   src          text;
-   errmsg       text;
-   detail       text;
-   old_msglevel text;
-   rc           integer := 0;
-BEGIN
-   /* remember old setting */
-   old_msglevel := current_setting('client_min_messages');
-   /* make the output less verbose */
-   SET LOCAL client_min_messages = warning;
-
-   /* set "search_path" to the Oracle stage and the extension schema */
-   SELECT extnamespace::regnamespace INTO extschema
-      FROM pg_catalog.pg_extension
-      WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
-
-   /* translate schema names to lower case */
-   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
-   FOR sch, tabname, trigname, bef, event, eachrow, whencl, ref, src IN
-      SELECT schema, table_name, trigger_name, is_before, triggering_event,
-             for_each_row, when_clause, referencing_names, trigger_body
-      FROM triggers
-      WHERE (only_schemas IS NULL
-         OR schema =ANY (only_schemas))
-        AND migrate
-   LOOP
-      BEGIN
-         /* create the trigger function */
-         EXECUTE format(E'CREATE FUNCTION %I.%I() RETURNS trigger LANGUAGE plpgsql AS\n$_f_$%s$_f_$',
-                        sch, trigname, src);
-         /* create the trigger itself */
-         EXECUTE format(E'CREATE TRIGGER %I %s %s ON %I.%I FOR EACH %s\n'
-                        '   EXECUTE PROCEDURE %I.%I()',
-                        trigname,
-                        CASE WHEN bef THEN 'BEFORE' ELSE 'AFTER' END,
-                        event,
-                        sch, tabname,
-                        CASE WHEN eachrow THEN 'ROW' ELSE 'STATEMENT' END,
-                        sch, trigname);
-      EXCEPTION
-         WHEN others THEN
-            /* turn the error into a warning */
-            GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT,
-               detail := PG_EXCEPTION_DETAIL;
-            RAISE WARNING 'Error creating trigger % on %.%', trigname, sch, tabname
-               USING DETAIL = errmsg || coalesce(': ' || detail, '');
-
-            rc := rc + 1;
-      END;
-   END LOOP;
-
-   /* reset client_min_messages */
-   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-
-   RETURN rc;
-END;$$;
-
-COMMENT ON FUNCTION oracle_migrate_triggers(name, name[]) IS 'sixth step of "oracle_migrate": create triggers';
-
-CREATE FUNCTION oracle_migrate_views(
-   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
-   only_schemas   name[]  DEFAULT NULL
-) RETURNS integer
-   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
-$$DECLARE
-   extschema    name;
-   sch          name;
-   vname        name;
-   col          name;
-   src          text;
-   stmt         text;
-   separator    text;
-   errmsg       text;
-   detail       text;
-   old_msglevel text;
-   rc           integer := 0;
-BEGIN
-   /* remember old setting */
-   old_msglevel := current_setting('client_min_messages');
-   /* make the output less verbose */
-   SET LOCAL client_min_messages = warning;
-
-   /* set "search_path" to the Oracle stage and the extension schema */
-   SELECT extnamespace::regnamespace INTO extschema
-      FROM pg_catalog.pg_extension
-      WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
-
-   /* translate schema names to lower case */
-   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
-   FOR sch, vname, src IN
-      SELECT schema, view_name, definition
-      FROM views
-      WHERE (only_schemas IS NULL
-         OR schema =ANY (only_schemas))
-        AND migrate
-   LOOP
-      stmt := format(E'CREATE VIEW %I.%I (', sch, vname);
-      separator := E'\n   ';
-      FOR col IN
-         SELECT column_name
-            FROM columns
-            WHERE schema = sch
-              AND table_name = vname
-            ORDER BY position
-      LOOP
-         stmt := stmt || separator || quote_ident(col);
-         separator := E',\n   ';
-      END LOOP;
-      stmt := stmt || E'\n) AS ' || src;
-
-      BEGIN
-         /* set "search_path" so that the function body can reference objects without schema */
-         EXECUTE format('SET LOCAL search_path = %I', sch);
-
-         EXECUTE stmt;
-
-         EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
-      EXCEPTION
-         WHEN others THEN
-            /* turn the error into a warning */
-            GET STACKED DIAGNOSTICS
-               errmsg := MESSAGE_TEXT,
-               detail := PG_EXCEPTION_DETAIL;
-            RAISE WARNING 'Error creating view %.%', sch, vname
-               USING DETAIL = errmsg || coalesce(': ' || detail, '');
-
-            rc := rc + 1;
-      END;
-   END LOOP;
-
-   /* reset client_min_messages */
-   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-
-   RETURN rc;
-END;$$;
-
-COMMENT ON FUNCTION oracle_migrate_views(name, name[]) IS 'seventh step of "oracle_migrate": create views';
+COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'seventh step of "oracle_migrate": create constraints and indexes';
 
 CREATE FUNCTION oracle_migrate_finish(
    staging_schema name    DEFAULT NAME 'ora_stage',
@@ -2050,27 +2050,27 @@ BEGIN
 
    /*
     * Fourth step:
-    * Create constraints and indexes.
-    */
-   rc := rc + oracle_migrate_constraints(pgstage_schema, only_schemas);
-
-   /*
-    * Fifth step:
     * Create functions (this won't do anything since they have "migrate = FALSE").
     */
    rc := rc + oracle_migrate_functions(pgstage_schema, only_schemas);
 
    /*
-    * Sixth step:
+    * Fifth step:
     * Create triggers (this won't do anything since they have "migrate = FALSE").
     */
    rc := rc + oracle_migrate_triggers(pgstage_schema, only_schemas);
 
    /*
-    * Seventh step:
+    * Sixth step:
     * Create views.
     */
    rc := rc + oracle_migrate_views(pgstage_schema, only_schemas);
+
+   /*
+    * Seventh step:
+    * Create constraints and indexes.
+    */
+   rc := rc + oracle_migrate_constraints(pgstage_schema, only_schemas);
 
    /*
     * Final step:

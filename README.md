@@ -167,10 +167,10 @@ Objects created by the extension
   - `oracle_migrate_prepare`
   - `oracle_migrate_mkforeign`
   - `oracle_migrate_tables`
-  - `oracle_migrate_constraints`
   - `oracle_migrate_functions`
   - `oracle_migrate_triggers`
   - `oracle_migrate_views`
+  - `oracle_migrate_constraints`
   - `oracle_migrate_finish`
 
   You need permissions to create schemas in the PostgreSQL database
@@ -268,24 +268,6 @@ Objects created by the extension
   The return value is the number of captured errors that have been turned
   into warnings.
 
-- Function `oracle_migrate_constraints`:
-
-  Creates constraints and indexes on all tables migrated from Oracle with
-  `oracle_migrate_tables`.
-
-  The parameters are:
-
-  - `pgstage_schema` (default `pgsql_stage`): The name of the staging
-    schema created by `oracle_migrate_prepare`.
-
-  - `only_schemas` (default NULL): An array of Oracle schema names
-    that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
-    system schemas are processed.  
-    The names must be as they appear in Oracle, which is usually in upper case.
-
-  The return value is the number of captured errors that have been turned
-  into warnings.
-
 - Function `oracle_migrate_functions`:
 
   Migrates functions for which `migrate` has been set to `TRUE`.
@@ -305,7 +287,7 @@ Objects created by the extension
 
 - Function `oracle_migrate_triggers`:
 
-  Migrates functions for which `migrate` has been set to `TRUE`.
+  Migrates triggers for which `migrate` has been set to `TRUE`.
   For each trigger, a trigger function with the same name is created.
 
   The parameters are:
@@ -324,6 +306,24 @@ Objects created by the extension
 - Function `oracle_migrate_views`:
 
   Migrates views for which `migrate` has been set to `TRUE`.
+
+  The parameters are:
+
+  - `pgstage_schema` (default `pgsql_stage`): The name of the staging
+    schema created by `oracle_migrate_prepare`.
+
+  - `only_schemas` (default NULL): An array of Oracle schema names
+    that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
+    system schemas are processed.  
+    The names must be as they appear in Oracle, which is usually in upper case.
+
+  The return value is the number of captured errors that have been turned
+  into warnings.
+
+- Function `oracle_migrate_constraints`:
+
+  Creates constraints and indexes on all tables migrated from Oracle with
+  `oracle_migrate_tables`.
 
   The parameters are:
 
@@ -436,14 +436,14 @@ it step by step:
   migrate several tables in parallel in multiple database sessions,
   which may speed up the migration process.
 
-- Call `oracle_migrate_constraints` to migrate constraints and
-  indexes from Oracle.
-
 - Call `oracle_migrate_functions` to migrate functions.
 
 - Call `oracle_migrate_triggers` to migrate triggers.
 
 - Call `oracle_migrate_views` to migrate views.
+
+- Call `oracle_migrate_constraints` to migrate constraints and
+  indexes from Oracle.
 
 - Call `oracle_migrate_finish` to remove the staging schemas and complete
   the migration.
