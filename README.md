@@ -120,6 +120,11 @@ the PostgreSQL shared files directory, which can be found with
 
     pg_config --sharedir
 
+If the extension building infrastructure PGXS is installed, you can do that
+simply with
+
+    make install
+
 The extension is installed with the SQL command
 
     CREATE EXTENSION ora_migrator;
