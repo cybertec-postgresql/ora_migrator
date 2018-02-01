@@ -1052,6 +1052,7 @@ BEGIN
       "deferrable"    boolean NOT NULL,
       deferred        boolean NOT NULL,
       condition       text    NOT NULL,
+      migrate         boolean NOT NULL DEFAULT TRUE,
       CONSTRAINT checks_pkey
          PRIMARY KEY (schema, table_name, constraint_name)
    );
@@ -1068,19 +1069,21 @@ BEGIN
       remote_schema   name    NOT NULL,
       remote_table    name    NOT NULL,
       remote_column   name    NOT NULL,
+      migrate         boolean NOT NULL DEFAULT TRUE,
       CONSTRAINT foreign_keys_pkey
          PRIMARY KEY (schema, table_name, constraint_name, position)
    );
 
    CREATE TABLE keys (
-      schema          name     NOT NULL,
-      table_name      name     NOT NULL,
-      constraint_name name     NOT NULL,
-      "deferrable"    boolean  NOT NULL,
-      deferred        boolean  NOT NULL,
-      column_name     name     NOT NULL,
-      position        integer  NOT NULL,
-      is_primary      boolean  NOT NULL,
+      schema          name    NOT NULL,
+      table_name      name    NOT NULL,
+      constraint_name name    NOT NULL,
+      "deferrable"    boolean NOT NULL,
+      deferred        boolean NOT NULL,
+      column_name     name    NOT NULL,
+      position        integer NOT NULL,
+      is_primary      boolean NOT NULL,
+      migrate         boolean NOT NULL DEFAULT TRUE,
       CONSTRAINT keys_pkey
          PRIMARY KEY (schema, table_name, constraint_name, position)
    );
@@ -1728,6 +1731,7 @@ BEGIN
       WHERE (only_schemas IS NULL
          OR k.schema =ANY (only_schemas))
         AND t.migrate
+        AND k.migrate
       ORDER BY schema, table_name, k.constraint_name, k.position
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
@@ -1801,6 +1805,7 @@ BEGIN
             AND fk.remote_schema =ANY (only_schemas))
         AND tl.migrate
         AND tf.migrate
+        AND fk.migrate
       ORDER BY fk.schema, fk.table_name, fk.constraint_name, fk.position
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
@@ -1865,6 +1870,7 @@ BEGIN
       WHERE (only_schemas IS NULL
          OR schema =ANY (only_schemas))
         AND t.migrate
+        AND c.migrate
    LOOP
       BEGIN
          EXECUTE format('ALTER TABLE %I.%I ADD CHECK(%s)', loc_s, loc_t, expr);

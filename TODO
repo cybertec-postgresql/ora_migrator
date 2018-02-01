@@ -2,5 +2,3 @@ List of things to do
 ====================
 
 - Support GENERATED AS IDENTITY with later Oracle versions.
-
-- Add a boolean flag "migrate" for constraints and indexes.
