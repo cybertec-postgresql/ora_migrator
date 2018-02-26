@@ -2090,3 +2090,161 @@ BEGIN
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate(name, name, name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';
+
+CREATE FUNCTION quote_xml(text) RETURNS text
+   LANGUAGE sql IMMUTABLE STRICT AS
+$$SELECT replace(
+          replace(
+             replace(
+                replace(
+                   replace(
+                      $1,
+                      '''', '&apos;'
+                   ),
+                   '&', '&amp;'
+                ),
+                '"', '&quot;'
+             ),
+             '>', '&gt;'
+          ),
+          '<', '&lt;'
+       )$$;
+
+CREATE FUNCTION oracle_export(
+   application_name text   DEFAULT TEXT 'application',
+   pgstage_schema   name   DEFAULT NAME 'pgsql_stage',
+   only_schemas     name[] DEFAULT NULL
+) RETURNS xml
+   LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   result text := E'<?xml version="1.0" encoding="UTF-8"?>\n'
+                  '<?xml-stylesheet type="text/xsl" href="xenesis.xsl"?>\n';
+   extschema name;
+   s       name;
+   t       name;
+   c       name;
+   ty      name;
+   nul     boolean;
+   con     name;
+   old_con name;
+   rs      name;
+   rt      name;
+   rc      name;
+BEGIN
+   /* set "search_path" to the PostgreSQL staging schema and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+
+   result := result || E'<application name="' || quote_xml(application_name)
+                    || E'" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="xenesis.xsd">\n';
+
+   /* loop schemas */
+   FOR s IN
+      SELECT schema FROM schemas
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+   LOOP
+      result := result || E'    <module name="' || quote_xml(s) || E'">\n';
+
+      /* loop all migrated tables in schema */
+      FOR t IN
+         SELECT table_name FROM tables
+         WHERE migrate AND schema = s
+           AND (only_schemas IS NULL
+              OR schema =ANY (only_schemas))
+      LOOP
+         result := result || E'\n        <entity name="' || quote_xml(t) || E'">\n'
+                   '            <attributes>\n';
+
+         /* loop all columns in the table */
+         FOR c, ty, nul IN
+            SELECT column_name, type_name, nullable
+            FROM columns
+            WHERE schema = s AND table_name = t
+              AND (only_schemas IS NULL
+                 OR schema =ANY (only_schemas))
+            ORDER BY position
+         LOOP
+            result := result || E'                <attribute name="' || quote_xml(c)
+                             || E'" datatype="' || quote_xml(ty)
+                             || E'" required="' || CASE WHEN nul THEN 'false' ELSE 'true' END
+                             || E'"/>\n';
+         END LOOP;
+
+         result := result || E'            </attributes>\n\n'
+                             '            <restrictions>\n';
+
+         /* loop through all unique and primary key contraints for the table */
+         old_con := '';
+         FOR con, c IN
+            SELECT constraint_name, column_name
+            FROM keys
+            WHERE schema = s AND table_name = t
+              AND (only_schemas IS NULL
+                 OR schema =ANY (only_schemas))
+            ORDER BY position
+         LOOP
+            IF con <> old_con THEN
+               IF old_con <> '' THEN
+                  result := result || E'                </unique>\n';
+               END IF;
+
+               result := result || E'                <unique>\n';
+               old_con := con;
+            END IF;
+
+            result := result || E'                    <unique-attribute name="'
+                             || quote_xml(c) || E'"/>\n';
+         END LOOP;
+         IF old_con <> '' THEN
+            result := result || E'                </unique>\n';
+         END IF;
+
+         /* loop through all foreign key constraints on the table */
+         old_con := '';
+         FOR con, c, rs, rt, rc IN
+            SELECT constraint_name, column_name, remote_schema, remote_table, remote_column
+            FROM foreign_keys
+            WHERE schema = s AND table_name = t
+              AND (only_schemas IS NULL
+                 OR schema =ANY (only_schemas)
+                    AND remote_schema =ANY (only_schemas))
+            ORDER BY position
+         LOOP
+            IF con <> old_con THEN
+               IF old_con <> '' THEN
+                  result := result || E'                </reference>\n';
+               END IF;
+
+               result := result || E'                <reference target-module="'
+                                || quote_xml(rs) || E'" target-entity="'
+                                || quote_xml(rt) || E'">\n';
+               old_con := con;
+            END IF;
+
+            result := result || E'                    <reference-attribute name="'
+                             || quote_xml(c) || E'" target-attribute="'
+                             || quote_xml(rc) || E'"/>\n';
+         END LOOP;
+         IF old_con <> '' THEN
+            result := result || E'                </reference>\n';
+         END IF;
+
+         result := result || E'            </restrictions>\n'
+                             '        </entity>\n';
+      END LOOP;
+
+      result := result || E'    </module>\n\n';
+   END LOOP;
+
+   result := result || E'</application>';
+
+   RETURN result::xml;
+END$$;
+
+COMMENT ON FUNCTION oracle_export(text, name, name[]) IS 'export metadata to an XML file';

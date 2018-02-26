@@ -347,7 +347,7 @@ Objects created by the extension
 
   Drops the staging schemas.
 
-  Parameter:
+  The parameters are:
 
   - `staging_schema` (default `ora_stage`): The name of the Oracle staging
     schema created by `oracle_migrate_prepare`.
@@ -357,6 +357,27 @@ Objects created by the extension
 
   The return value is the number of captured errors that have been turned
   into warnings.
+
+- Function `oracle_export`:
+
+  Exports the metadata in the PostgreSQL staging schema as XML file.
+
+  This XML file does not contain the complete information; it is intended as
+  input for software that automatically designs an application based on
+  a database schema.
+
+  The parameters are:
+
+  - `application_name` (default `application`): The name of the application
+
+  - `pgstage_schema` (default `pgsql_stage`): The name of the staging
+    schema created by `oracle_migrate_prepare`.
+
+  - `only_schemas` (default NULL): An array of Oracle schema names
+    that should be exported.
+    The names must be as they appear in Oracle, which is usually in upper case.
+
+  The function returns a value of type `xml` that contains the information.
 
 - Function `create_oraviews`:
 
