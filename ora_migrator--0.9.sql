@@ -2158,8 +2158,10 @@ BEGIN
            AND (only_schemas IS NULL
               OR schema =ANY (only_schemas))
       LOOP
-         result := result || E'\n        <entity name="' || quote_xml(t) || E'">\n'
-                   '            <attributes>\n';
+         result := result || E'\n        <entity name="' || quote_xml(t) || E'" label="'
+                          || quote_xml(t) || E'" description="A '
+                          || quote_xml(t) || E' entity" delete="false" translatable="false">\n'
+                          || E'            <attributes>\n';
 
          /* loop all columns in the table */
          FOR c, ty, nul IN
@@ -2170,6 +2172,11 @@ BEGIN
                  OR schema =ANY (only_schemas))
             ORDER BY position
          LOOP
+            /* use "text" for all string types */
+            IF ty LIKE 'character%' THEN
+               ty := 'text';
+            END IF;
+
             result := result || E'                <attribute name="' || quote_xml(c)
                              || E'" datatype="' || quote_xml(ty)
                              || E'" required="' || CASE WHEN nul THEN 'false' ELSE 'true' END
