@@ -509,3 +509,10 @@ is possible for oracle_fdw, so the queries should be efficient.
 
 All Oracle object names will appear like they are in Oracle, which is
 usually in upper case.
+
+Support
+=======
+
+Create an issue on Github:
+https://github.com/cybertec-postgresql/ora_migrator/issues
+or contact Cybertec: https://www.cybertec-postgresql.com
