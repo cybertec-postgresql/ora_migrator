@@ -845,7 +845,7 @@ BEGIN
                    '          position,\n'
                    '          descend,\n'
                    '          is_expression,\n'
-                   '          CASE WHEN is_expression THEN ''('' || lower(column_name) || '')'' ELSE oracle_tolower(column_name) END\n'
+                   '          CASE WHEN is_expression THEN ''('' || lower(column_name) || '')'' ELSE oracle_tolower(column_name)::text END\n'
                    '   FROM %I.index_columns\n'
                    '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
                    'ON CONFLICT ON CONSTRAINT index_columns_pkey DO UPDATE SET\n'
@@ -1424,8 +1424,9 @@ BEGIN
    /* loop through all foreign tables to be migrated */
    FOR sch, tab IN
       SELECT schema, table_name FROM tables
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
+      WHERE migrate
+        AND (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
    LOOP
       EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
       RAISE NOTICE 'Migrating table %.% ...', sch, tab;
