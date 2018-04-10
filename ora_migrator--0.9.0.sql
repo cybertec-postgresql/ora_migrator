@@ -1424,8 +1424,9 @@ BEGIN
    /* loop through all foreign tables to be migrated */
    FOR sch, tab IN
       SELECT schema, table_name FROM tables
-      WHERE only_schemas IS NULL
-         OR schema =ANY (only_schemas)
+      WHERE migrate
+        AND (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
    LOOP
       EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
       RAISE NOTICE 'Migrating table %.% ...', sch, tab;
