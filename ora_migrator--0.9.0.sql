@@ -845,7 +845,7 @@ BEGIN
                    '          position,\n'
                    '          descend,\n'
                    '          is_expression,\n'
-                   '          CASE WHEN is_expression THEN ''('' || lower(column_name) || '')'' ELSE oracle_tolower(column_name) END\n'
+                   '          CASE WHEN is_expression THEN ''('' || lower(column_name) || '')'' ELSE oracle_tolower(column_name)::text END\n'
                    '   FROM %I.index_columns\n'
                    '   WHERE $1 IS NULL OR schema =ANY ($1)\n'
                    'ON CONFLICT ON CONSTRAINT index_columns_pkey DO UPDATE SET\n'
