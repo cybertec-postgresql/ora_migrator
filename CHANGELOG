@@ -1,3 +1,23 @@
+Version 0.9.1 (beta)
+
+Enhancements:
+
+- Remove Oracle sample schemas from the list of system schemas.
+  This means that they will be migrated if you don't specify "only_schemas".
+  This is convenient for testing, and people probably don't have them in
+  production anyway.
+
+  Per request from "seadba" and Michael Vitale.
+
+Bugfixes:
+
+- Respect tables.migrate in oracle_migrate_tables.
+  The function did not check whether the flag was set, leading to errors.
+
+- Fix truncated index expressions.
+  In oracle_migrate_refresh, index expressions were inadvertedly truncated to
+  63 bytes.
+
 Version 0.9.0 (beta)  Mar 20 2018
 
 - first release
