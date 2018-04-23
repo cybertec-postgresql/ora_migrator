@@ -3,6 +3,508 @@
 -- complain if script is sourced in psql, rather than via CREATE EXTENSION
 \echo Use "CREATE EXTENSION ora_migrator" to load this file. \quit
 
+CREATE OR REPLACE FUNCTION create_oraviews (
+   server      name,
+   schema      name    DEFAULT NAME 'public',
+   max_long integer DEFAULT 32767
+) RETURNS void
+   LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   old_msglevel text;
+
+   sys_schemas text :=
+      E'''''ANONYMOUS'''', ''''APEX_PUBLIC_USER'''', ''''APEX_030200'''', ''''APEX_040000'''', ''''APPQOSSYS'''',\n'
+      '         ''''AURORA$JIS$UTILITY$'''', ''''AURORA$ORB$UNAUTHENTICATED'''',\n'
+      '         ''''CTXSYS'''', ''''DBSNMP'''', ''''DIP'''', ''''DMSYS'''', ''''EXFSYS'''', ''''FLOWS_FILES'''',\n'
+      '         ''''LBACSYS'''', ''''MDDATA'''', ''''MDSYS'''', ''''MGMT_VIEW'''',\n'
+      '         ''''ODM'''', ''''ODM_MTR'''', ''''OLAPSYS'''', ''''ORACLE_OCM'''', ''''ORDDATA'''',\n'
+      '         ''''ORDPLUGINS'''', ''''ORDSYS'''', ''''OSE$HTTP$ADMIN'''', ''''OUTLN'''',\n'
+      '         ''''SI_INFORMTN_SCHEMA'''', ''''SPATIAL_CSW_ADMIN_USR'''',\n'
+      '         ''''SPATIAL_WFS_ADMIN_USR'''', ''''SYS'''', ''''SYSMAN'''', ''''SYSTEM'''', ''''TRACESRV'''',\n'
+      '         ''''MTSSYS'''', ''''OASPUBLIC'''', ''''OLAPSYS'''', ''''OWBSYS'''', ''''OWBSYS_AUDIT'''', ''''PERFSTAT'''',\n'
+      '         ''''WEBSYS'''', ''''WK_PROXY'''', ''''WKSYS'''', ''''WK_TEST'''', ''''WMSYS'''', ''''XDB'''', ''''XS$NULL''''';
+
+   tables_sql text := E'CREATE FOREIGN TABLE %I.tables (\n'
+      '   schema     varchar(128) NOT NULL,\n'
+      '   table_name varchar(128) NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       table_name\n'
+         'FROM dba_tables\n'
+         'WHERE temporary = ''''N''''\n'
+         '  AND secondary = ''''N''''\n'
+         '  AND nested    = ''''NO''''\n'
+         '  AND dropped   = ''''NO''''\n'
+         '  AND (owner, table_name)\n'
+         '     NOT IN (SELECT owner, mview_name\n'
+         '             FROM dba_mviews)\n'
+         '  AND (owner, table_name)\n'
+         '     NOT IN (SELECT log_owner, log_table\n'
+         '             FROM dba_mview_logs)\n'
+         '  AND owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   columns_sql text := E'CREATE FOREIGN TABLE %I.columns (\n'
+      '   schema        varchar(128) NOT NULL,\n'
+      '   table_name    varchar(128) NOT NULL,\n'
+      '   column_name   varchar(128) NOT NULL,\n'
+      '   position      integer      NOT NULL,\n'
+      '   type_name     varchar(128) NOT NULL,\n'
+      '   type_schema   varchar(128) NOT NULL,\n'
+      '   length        integer      NOT NULL,\n'
+      '   precision     integer,\n'
+      '   scale         integer,\n'
+      '   nullable      boolean      NOT NULL,\n'
+      '   default_value text\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT col.owner,\n'
+         '       col.table_name,\n'
+         '       col.column_name,\n'
+         '       col.column_id,\n'
+         '       col.data_type,\n'
+         '       col.data_type_owner,\n'
+         '       col.char_length,\n'
+         '       col.data_precision,\n'
+         '       col.data_scale,\n'
+         '       CASE WHEN col.nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable,\n'
+         '       col.data_default\n'
+         'FROM dba_tab_columns col\n'
+         '   JOIN (SELECT owner, table_name\n'
+         '            FROM dba_tables\n'
+         '            WHERE owner NOT IN (' || sys_schemas || E')\n'
+         '              AND temporary = ''''N''''\n'
+         '              AND secondary = ''''N''''\n'
+         '              AND nested    = ''''NO''''\n'
+         '              AND dropped   = ''''NO''''\n'
+         '         UNION SELECT owner, view_name\n'
+         '            FROM dba_views\n'
+         '            WHERE owner NOT IN (' || sys_schemas || E')\n'
+         '        ) tab\n'
+         '      ON tab.owner = col.owner AND tab.table_name = col.table_name\n'
+         'WHERE (col.owner, col.table_name)\n'
+         '     NOT IN (SELECT owner, mview_name\n'
+         '             FROM dba_mviews)\n'
+         '  AND (col.owner, col.table_name)\n'
+         '     NOT IN (SELECT log_owner, log_table\n'
+         '             FROM dba_mview_logs)\n'
+         '  AND col.owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   checks_sql text := E'CREATE FOREIGN TABLE %I.checks (\n'
+      '   schema          varchar(128) NOT NULL,\n'
+      '   table_name      varchar(128) NOT NULL,\n'
+      '   constraint_name varchar(128) NOT NULL,\n'
+      '   "deferrable"    boolean      NOT NULL,\n'
+      '   deferred        boolean      NOT NULL,\n'
+      '   condition       text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT con.owner,\n'
+         '       con.table_name,\n'
+         '       con.constraint_name,\n'
+         '       CASE WHEN con.deferrable = ''''DEFERRABLE'''' THEN 1 ELSE 0 END deferrable,\n'
+         '       CASE WHEN con.deferred   = ''''DEFERRED''''   THEN 1 ELSE 0 END deferred,\n'
+         '       con.search_condition\n'
+         'FROM dba_constraints con\n'
+         '   JOIN dba_tables tab\n'
+         '      ON tab.owner = con.owner AND tab.table_name = con.table_name\n'
+         'WHERE tab.temporary = ''''N''''\n'
+         '  AND tab.secondary = ''''N''''\n'
+         '  AND tab.nested    = ''''NO''''\n'
+         '  AND tab.dropped   = ''''NO''''\n'
+         '  AND con.constraint_type = ''''C''''\n'
+         '  AND con.status          = ''''ENABLED''''\n'
+         '  AND con.validated       = ''''VALIDATED''''\n'
+         '  AND con.invalid         IS NULL\n'
+         '  AND con.owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   foreign_keys_sql text := E'CREATE FOREIGN TABLE %I.foreign_keys (\n'
+      '   schema          varchar(128) NOT NULL,\n'
+      '   table_name      varchar(128) NOT NULL,\n'
+      '   constraint_name varchar(128) NOT NULL,\n'
+      '   "deferrable"    boolean      NOT NULL,\n'
+      '   deferred        boolean      NOT NULL,\n'
+      '   delete_rule     text         NOT NULL,\n'
+      '   column_name     varchar(128) NOT NULL,\n'
+      '   position        integer      NOT NULL,\n'
+      '   remote_schema   varchar(128) NOT NULL,\n'
+      '   remote_table    varchar(128) NOT NULL,\n'
+      '   remote_column   varchar(128) NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT con.owner,\n'
+         '       con.table_name,\n'
+         '       con.constraint_name,\n'
+         '       CASE WHEN con.deferrable = ''''DEFERRABLE'''' THEN 1 ELSE 0 END deferrable,\n'
+         '       CASE WHEN con.deferred   = ''''DEFERRED''''   THEN 1 ELSE 0 END deferred,\n'
+         '       con.delete_rule,\n'
+         '       col.column_name,\n'
+         '       col.position,\n'
+         '       r_col.owner AS remote_schema,\n'
+         '       r_col.table_name AS remote_table,\n'
+         '       r_col.column_name AS remote_column\n'
+         'FROM dba_constraints con\n'
+         '   JOIN dba_cons_columns col\n'
+         '      ON con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name\n'
+         '   JOIN dba_cons_columns r_col\n'
+         '      ON con.r_owner = r_col.owner AND con.r_constraint_name = r_col.constraint_name AND col.position = r_col.position\n'
+         'WHERE con.constraint_type = ''''R''''\n'
+         '  AND con.status          = ''''ENABLED''''\n'
+         '  AND con.validated       = ''''VALIDATED''''\n'
+         '  AND con.owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   keys_sql text := E'CREATE FOREIGN TABLE %I.keys (\n'
+      '   schema          varchar(128) NOT NULL,\n'
+      '   table_name      varchar(128) NOT NULL,\n'
+      '   constraint_name varchar(128) NOT NULL,\n'
+      '   "deferrable"    boolean      NOT NULL,\n'
+      '   deferred        boolean      NOT NULL,\n'
+      '   column_name     varchar(128) NOT NULL,\n'
+      '   position        integer      NOT NULL,\n'
+      '   is_primary      boolean      NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT con.owner,\n'
+         '       con.table_name,\n'
+         '       con.constraint_name,\n'
+         '       CASE WHEN deferrable = ''''DEFERRABLE'''' THEN 1 ELSE 0 END deferrable,\n'
+         '       CASE WHEN deferred   = ''''DEFERRED''''   THEN 1 ELSE 0 END deferred,\n'
+         '       col.column_name,\n'
+         '       col.position,\n'
+         '       CASE WHEN con.constraint_type = ''''P'''' THEN 1 ELSE 0 END is_primary\n'
+         'FROM dba_tables tab\n'
+         '   JOIN dba_constraints con\n'
+         '      ON tab.owner = con.owner AND tab.table_name = con.table_name\n'
+         '   JOIN dba_cons_columns col\n'
+         '      ON con.owner = col.owner AND con.table_name = col.table_name AND con.constraint_name = col.constraint_name\n'
+         'WHERE (con.owner, con.table_name)\n'
+         '     NOT IN (SELECT owner, mview_name\n'
+         '             FROM dba_mviews)\n'
+         '  AND con.constraint_type IN (''''P'''', ''''U'''')\n'
+         '  AND con.status    = ''''ENABLED''''\n'
+         '  AND con.validated = ''''VALIDATED''''\n'
+         '  AND tab.temporary = ''''N''''\n'
+         '  AND tab.secondary = ''''N''''\n'
+         '  AND tab.nested    = ''''NO''''\n'
+         '  AND tab.dropped   = ''''NO''''\n'
+         '  AND con.owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   views_sql text := E'CREATE FOREIGN TABLE %I.views (\n'
+      '   schema     varchar(128) NOT NULL,\n'
+      '   view_name  varchar(128) NOT NULL,\n'
+      '   definition text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       view_name,\n'
+         '       text\n'
+         'FROM dba_views\n'
+         'WHERE owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   func_src_sql text := E'CREATE FOREIGN TABLE %I.func_src (\n'
+      '   schema        varchar(128) NOT NULL,\n'
+      '   function_name varchar(128) NOT NULL,\n'
+      '   is_procedure  boolean      NOT NULL,\n'
+      '   line_number   integer      NOT NULL,\n'
+      '   line          text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT pro.owner,\n'
+         '       pro.object_name,\n'
+         '       CASE WHEN pro.object_type = ''''PROCEDURE'''' THEN 1 ELSE 0 END is_procedure,\n'
+         '       src.line,\n'
+         '       src.text\n'
+         'FROM dba_procedures pro\n'
+         '   JOIN dba_source src\n'
+         '      ON pro.owner = src.owner\n'
+         '         AND pro.object_name = src.name\n'
+         '         AND pro.object_type = src.type\n'
+         'WHERE pro.object_type IN (''''FUNCTION'''', ''''PROCEDURE'''')\n'
+         '  AND pro.owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   functions_sql text := E'CREATE VIEW %I.functions AS\n'
+      'SELECT schema,\n'
+      '       function_name,\n'
+      '       is_procedure,\n'
+      '       string_agg(line, TEXT '''' ORDER BY line_number) AS source\n'
+      'FROM %I.func_src\n'
+      'GROUP BY schema, function_name, is_procedure';
+
+   sequences_sql text := E'CREATE FOREIGN TABLE %I.sequences (\n'
+      '   schema        varchar(128) NOT NULL,\n'
+      '   sequence_name varchar(128) NOT NULL,\n'
+      '   min_value     numeric(28),\n'
+      '   max_value     numeric(28),\n'
+      '   increment_by  numeric(28)  NOT NULL,\n'
+      '   cyclical      boolean      NOT NULL,\n'
+      '   cache_size    integer      NOT NULL,\n'
+      '   last_value    numeric(28)  NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT sequence_owner,\n'
+         '       sequence_name,\n'
+         '       min_value,\n'
+         '       max_value,\n'
+         '       increment_by,\n'
+         '       CASE WHEN cycle_flag = ''''Y'''' THEN 1 ELSE 0 END cyclical,\n'
+         '       cache_size,\n'
+         '       last_number\n'
+         'FROM dba_sequences\n'
+         'WHERE sequence_owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   index_exp_sql text := E'CREATE FOREIGN TABLE %I.index_exp (\n'
+      '   schema         varchar(128) NOT NULL,\n'
+      '   table_name     varchar(128) NOT NULL,\n'
+      '   index_name     varchar(128) NOT NULL,\n'
+      '   uniqueness     boolean      NOT NULL,\n'
+      '   position       integer      NOT NULL,\n'
+      '   descend        boolean      NOT NULL,\n'
+      '   col_name       text         NOT NULL,\n'
+      '   col_expression text\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT ic.table_owner,\n'
+         '       ic.table_name,\n'
+         '       ic.index_name,\n'
+         '       CASE WHEN i.uniqueness = ''''UNIQUE'''' THEN 1 ELSE 0 END uniqueness,\n'
+         '       ic.column_position,\n'
+         '       CASE WHEN ic.descend = ''''DESC'''' THEN 1 ELSE 0 END descend,\n'
+         '       ic.column_name,\n'
+         '       ie.column_expression\n'
+         'FROM dba_indexes i,\n'
+         '     dba_ind_columns ic,\n'
+         '     dba_ind_expressions ie\n'
+         'WHERE i.owner            = ic.index_owner\n'
+         '  AND i.index_name       = ic.index_name\n'
+         '  AND i.table_owner      = ic.table_owner\n'
+         '  AND i.table_name       = ic.table_name\n'
+         '  AND ic.index_owner     = ie.index_owner(+)\n'
+         '  AND ic.index_name      = ie.index_name(+)\n'
+         '  AND ic.table_owner     = ie.table_owner(+)\n'
+         '  AND ic.table_name      = ie.table_name(+)\n'
+         '  AND ic.column_position = ie.column_position(+)\n'
+         '  AND i.index_type NOT IN (''''LOB'''', ''''DOMAIN'''')\n'
+         '  AND NOT EXISTS (SELECT 1\n'
+         '                  FROM dba_constraints c\n'
+         '                  WHERE c.owner = i.table_owner\n'
+         '                    AND c.table_name = i.table_name\n'
+         '                    AND COALESCE(c.index_owner, i.owner) = i.owner\n'
+         '                    AND c.index_name = i.index_name)\n'
+         '  AND ic.table_owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   index_columns_sql text := E'CREATE VIEW %I.index_columns AS\n'
+      'SELECT schema,\n'
+      '       table_name,\n'
+      '       index_name,\n'
+      '       uniqueness,\n'
+      '       position,\n'
+      '       descend,\n'
+      '       col_expression IS NOT NULL\n'
+      '          AND (NOT descend OR col_expression !~ ''^"[^"]*"$'') AS is_expression,\n'
+      '       coalesce(\n'
+      '          CASE WHEN descend AND col_expression ~ ''^"[^"]*"$''\n'
+      '               THEN replace (col_expression, ''"'', '''')\n'
+      '               ELSE col_expression\n'
+      '          END,\n'
+      '          col_name) AS column_name\n'
+      'FROM %I.index_exp\n';
+
+   schemas_sql text := E'CREATE FOREIGN TABLE %I.schemas (\n'
+      '   schema varchar(128) NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT username\n'
+         'FROM dba_users\n'
+         'WHERE username NOT IN( ' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   trig_sql text := E'CREATE FOREIGN TABLE %I.trig (\n'
+      '   schema            varchar(128) NOT NULL,\n'
+      '   table_name        varchar(128) NOT NULL,\n'
+      '   trigger_name      varchar(128) NOT NULL,\n'
+      '   trigger_type      varchar(16)  NOT NULL,\n'
+      '   triggering_event  varchar(227) NOT NULL,\n'
+      '   when_clause       text,\n'
+      '   referencing_names varchar(128) NOT NULL,\n'
+      '   trigger_body      text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT table_owner,\n'
+         '       table_name,\n'
+         '       trigger_name,\n'
+         '       trigger_type,\n'
+         '       triggering_event,\n'
+         '       when_clause,\n'
+         '       referencing_names,\n'
+         '       trigger_body\n'
+         'FROM dba_triggers\n'
+         'WHERE table_owner NOT IN( ' || sys_schemas || E')\n'
+         '  AND base_object_type IN (''''TABLE'''', ''''VIEW'''')\n'
+         '  AND status = ''''ENABLED''''\n'
+         '  AND crossedition = ''''NO''''\n'
+         '  AND trigger_type <> ''''COMPOUND'''''
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   triggers_sql text := E'CREATE VIEW %I.triggers AS\n'
+      'SELECT schema,\n'
+      '       table_name,\n'
+      '       trigger_name,\n'
+      '       trigger_type LIKE ''BEFORE%%'' AS is_before,\n'
+      '       triggering_event,\n'
+      '       trigger_type LIKE ''%%EACH ROW'' AS for_each_row,\n'
+      '       when_clause,\n'
+      '       referencing_names,\n'
+      '       trigger_body\n'
+      'FROM %I.trig';
+
+   pack_src_sql text := E'CREATE FOREIGN TABLE %I.pack_src (\n'
+      '   schema       varchar(128) NOT NULL,\n'
+      '   package_name varchar(128) NOT NULL,\n'
+      '   src_type     varchar(12)  NOT NULL,\n'
+      '   line_number  integer      NOT NULL,\n'
+      '   line         text         NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT pro.owner,\n'
+         '       pro.object_name,\n'
+         '       src.type,\n'
+         '       src.line,\n'
+         '       src.text\n'
+         'FROM dba_procedures pro\n'
+         '   JOIN dba_source src\n'
+         '      ON pro.owner = src.owner\n'
+         '         AND pro.object_name = src.name\n'
+         'WHERE pro.object_type = ''''PACKAGE''''\n'
+         '  AND src.type IN (''''PACKAGE'''', ''''PACKAGE BODY'''')\n'
+         '  AND procedure_name IS NULL\n'
+         '  AND pro.owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   packages_sql text := E'CREATE VIEW %I.packages AS\n'
+      'SELECT schema,\n'
+      '       package_name,\n'
+      '       src_type = ''PACKAGE BODY'' AS is_body,\n'
+      '       string_agg(line, TEXT '''' ORDER BY line_number) AS source\n'
+      'FROM %I.pack_src\n'
+      'GROUP BY schema, package_name, src_type';
+
+   table_privs_sql text := E'CREATE FOREIGN TABLE %I.table_privs (\n'
+      '   schema     varchar(128) NOT NULL,\n'
+      '   table_name varchar(128) NOT NULL,\n'
+      '   privilege  varchar(40)  NOT NULL,\n'
+      '   grantor    varchar(128) NOT NULL,\n'
+      '   grantee    varchar(128) NOT NULL,\n'
+      '   grantable  boolean      NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       table_name,\n'
+         '       privilege,\n'
+         '       grantor,\n'
+         '       grantee,\n'
+         '       CASE WHEN grantable = ''''YES'''' THEN 1 ELSE 0 END grantable\n'
+         'FROM dba_tab_privs\n'
+         'WHERE owner NOT IN (' || sys_schemas || E')\n'
+         '  AND grantor NOT IN (' || sys_schemas || E')\n'
+         '  AND grantee NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   column_privs_sql text := E'CREATE FOREIGN TABLE %I.column_privs (\n'
+      '   schema      varchar(128) NOT NULL,\n'
+      '   table_name  varchar(128) NOT NULL,\n'
+      '   column_name varchar(128) NOT NULL,\n'
+      '   privilege   varchar(40)  NOT NULL,\n'
+      '   grantor     varchar(128) NOT NULL,\n'
+      '   grantee     varchar(128) NOT NULL,\n'
+      '   grantable   boolean      NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       table_name,\n'
+         '       column_name,\n'
+         '       privilege,\n'
+         '       grantor,\n'
+         '       grantee,\n'
+         '       CASE WHEN grantable = ''''YES'''' THEN 1 ELSE 0 END grantable\n'
+         'FROM dba_col_privs\n'
+         'WHERE owner NOT IN (' || sys_schemas || E')\n'
+         '  AND grantor NOT IN (' || sys_schemas || E')\n'
+         '  AND grantee NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* tables */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.tables', schema);
+   EXECUTE format(tables_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.tables IS ''Oracle tables on foreign server "%I"''', schema, server);
+   /* columns */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.columns', schema);
+   EXECUTE format(columns_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.columns IS ''columns of Oracle tables and views on foreign server "%I"''', schema, server);
+   /* checks */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.checks', schema);
+   EXECUTE format(checks_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.checks IS ''Oracle check constraints on foreign server "%I"''', schema, server);
+   /* foreign_keys */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.foreign_keys', schema);
+   EXECUTE format(foreign_keys_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.foreign_keys IS ''Oracle foreign key columns on foreign server "%I"''', schema, server);
+   /* keys */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.keys', schema);
+   EXECUTE format(keys_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.keys IS ''Oracle primary and unique key columns on foreign server "%I"''', schema, server);
+   /* views */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.views', schema);
+   EXECUTE format(views_sql, schema, server, max_long);
+   /* func_src and functions */
+   EXECUTE format('DROP VIEW IF EXISTS %I.functions', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.func_src', schema);
+   EXECUTE format(func_src_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.func_src IS ''source lines for Oracle functions and procedures on foreign server "%I"''', schema, server);
+   EXECUTE format(functions_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.functions IS ''Oracle functions and procedures on foreign server "%I"''', schema, server);
+   /* sequences */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.sequences', schema);
+   EXECUTE format(sequences_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.sequences IS ''Oracle sequences on foreign server "%I"''', schema, server);
+   /* index_exp and index_columns */
+   EXECUTE format('DROP VIEW IF EXISTS %I.index_columns', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.index_exp', schema);
+   EXECUTE format(index_exp_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.index_exp IS ''Oracle index columns on foreign server "%I"''', schema, server);
+   EXECUTE format(index_columns_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.index_columns IS ''Oracle index columns on foreign server "%I"''', schema, server);
+   /* schemas */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.schemas', schema);
+   EXECUTE format(schemas_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.schemas IS ''Oracle schemas on foreign server "%I"''', schema, server);
+   /* trig and triggers */
+   EXECUTE format('DROP VIEW IF EXISTS %I.triggers', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.trig', schema);
+   EXECUTE format(trig_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.trig IS ''Oracle triggers on foreign server "%I"''', schema, server);
+   EXECUTE format(triggers_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.triggers IS ''Oracle triggers on foreign server "%I"''', schema, server);
+   /* pack_src and packages */
+   EXECUTE format('DROP VIEW IF EXISTS %I.packages', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.pack_src', schema);
+   EXECUTE format(pack_src_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.pack_src IS ''Oracle package source lines on foreign server "%I"''', schema, server);
+   EXECUTE format(packages_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.packages IS ''Oracle packages on foreign server "%I"''', schema, server);
+   /* table_privs */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.table_privs', schema);
+   EXECUTE format(table_privs_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.table_privs IS ''Privileges on Oracle tables on foreign server "%I"''', schema, server);
+   /* column_privs */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.column_privs', schema);
+   EXECUTE format(column_privs_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.column_privs IS ''Privileges on Oracle table columns on foreign server "%I"''', schema, server);
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+END;$$;
+
 CREATE OR REPLACE FUNCTION oracle_migrate_tables(
    staging_schema name    DEFAULT NAME 'ora_stage',
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
