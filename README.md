@@ -78,7 +78,7 @@ will belong to this user:
     DROP EXTENSION ora_migrator;
 
 Even though the migration of two of the tables failed because of bad data in
-the Oracle database, the rest of the data were migrated sucessfully.
+the Oracle database, the rest of the data were migrated successfully.
 
 Prerequisites
 =============
@@ -411,7 +411,7 @@ Objects created by the extension
   Calling the function will create the following foreign tables and views:
 
   - `schemas`: Oracle schemas
-  - `checks`: Oracle ckeck constraints
+  - `checks`: Oracle check constraints
   - `column_privs`: Privileges on Oracle table columns
   - `columns`: columns of Oracle tables and views
   - `foreign_keys`: columns of Oracle foreign key constraints
