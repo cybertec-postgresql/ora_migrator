@@ -40,7 +40,7 @@ ALTER SESSION SET NLS_TIMESTAMP_TZ_FORMAT='YYYY-MM-DD HH24:MI:SS.FF9TZH:TZM BC';
 
 CREATE TABLE tab1 (
    id         NUMBER(5)         CONSTRAINT tab1_pkey PRIMARY KEY,
-   vc         VARCHAR2(30 CHAR),
+   vc         VARCHAR2(30 CHAR) DEFAULT 'AT ' || sysdate,
    n          NUMBER(10)        CONSTRAINT tab1_n_null NOT NULL,
    bf         BINARY_FLOAT      CONSTRAINT tab1_bf_check CHECK (bf > 0),
    bd         BINARY_DOUBLE,
@@ -70,8 +70,8 @@ INSERT INTO tab1 (id, vc, n, bf, bd, d, ts)
            '2018-01-26 00:00:00 AD',
            '2018-01-26 22:30:00.0 AD');
 
-INSERT INTO tab1 (id, n, bf, d)
-   VALUES (2, 87654, 9.3452, '2017-12-29 12:00:00 AD');
+INSERT INTO tab1 (id, vc, n, bf, d)
+   VALUES (2, NULL, 87654, 9.3452, '2017-12-29 12:00:00 AD');
 
 COMMIT;
 

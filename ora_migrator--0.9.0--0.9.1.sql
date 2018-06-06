@@ -505,6 +505,22 @@ BEGIN
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 END;$$;
 
+CREATE FUNCTION translate_expression(s text) RETURNS text
+   LANGUAGE plpgsql IMMUTABLE STRICT SET search_path FROM CURRENT AS
+$$DECLARE
+   r text;
+BEGIN
+   FOR r IN SELECT unnest(regexp_match(s, '"([^"]*)"')) LOOP
+      s := replace(s, '"' || r || '"', '"' || oracle_tolower(r) || '"' );
+   END LOOP;
+   s := regexp_replace(s, '\msysdate\M', 'current_date', 'gi');
+   s := regexp_replace(s, '\msystimestamp\M', 'current_timestamp', 'gi');
+
+   RETURN s;
+END;$$;
+
+COMMENT ON FUNCTION translate_expression(text) IS 'helper function to translate Oracle SQL expressions to PostgreSQL';
+
 CREATE OR REPLACE FUNCTION oracle_migrate_tables(
    staging_schema name    DEFAULT NAME 'ora_stage',
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
@@ -583,6 +599,7 @@ $$DECLARE
    n_type       text;
    geom_type    text;
    expr         text;
+   s            text;
 BEGIN
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -674,12 +691,7 @@ BEGIN
          ELSE n_type := 'text';  -- cannot translate
       END CASE;
 
-      /* try to translate default value */
-      expr := replace(replace(lower(v_default),
-                              'sysdate',
-                              'current_date'),
-                      'systimestamp',
-                      'current_timestamp');
+      expr := translate_expression(v_default);
 
       /* insert a row into the columns table */
       INSERT INTO columns (schema, table_name, column_name, oracle_name, position, type_name, oracle_type, nullable, default_value)
@@ -722,7 +734,7 @@ BEGIN
                    '          oracle_tolower(constraint_name),\n'
                    '          "deferrable",\n'
                    '          deferred,\n'
-                   '          lower(condition)\n'
+                   '          translate_expression(condition)\n'
                    '   FROM %I.checks\n'
                    '   WHERE ($1 IS NULL OR schema =ANY ($1))\n'
                    '     AND condition !~ ''^"[^"]*" IS NOT NULL$''\n'

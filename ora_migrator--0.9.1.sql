@@ -507,12 +507,28 @@ END;$$;
 
 COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle foreign tables for the metadata of a foreign server';
 
+/* this will silently truncate anything exceeding 63 bytes ...*/
 CREATE FUNCTION oracle_tolower(text) RETURNS name
-   /* this will silently truncate anything exceeding 63 bytes ...*/
    LANGUAGE sql STABLE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 'SELECT CASE WHEN $1 = upper($1) THEN lower($1)::name ELSE $1::name END';
 
 COMMENT ON FUNCTION oracle_tolower(text) IS 'helper function to fold Oracle names to lower case';
+
+CREATE FUNCTION translate_expression(s text) RETURNS text
+   LANGUAGE plpgsql IMMUTABLE STRICT SET search_path FROM CURRENT AS
+$$DECLARE
+   r text;
+BEGIN
+   FOR r IN SELECT unnest(regexp_match(s, '"([^"]*)"')) LOOP
+      s := replace(s, '"' || r || '"', '"' || oracle_tolower(r) || '"' );
+   END LOOP;
+   s := regexp_replace(s, '\msysdate\M', 'current_date', 'gi');
+   s := regexp_replace(s, '\msystimestamp\M', 'current_timestamp', 'gi');
+
+   RETURN s;
+END;$$;
+
+COMMENT ON FUNCTION translate_expression(text) IS 'helper function to translate Oracle SQL expressions to PostgreSQL';
 
 CREATE FUNCTION adjust_to_bigint(numeric) RETURNS bigint
    LANGUAGE sql STABLE CALLED ON NULL INPUT SET search_path = pg_catalog AS
@@ -587,6 +603,7 @@ $$DECLARE
    n_type       text;
    geom_type    text;
    expr         text;
+   s            text;
 BEGIN
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -678,12 +695,7 @@ BEGIN
          ELSE n_type := 'text';  -- cannot translate
       END CASE;
 
-      /* try to translate default value */
-      expr := replace(replace(lower(v_default),
-                              'sysdate',
-                              'current_date'),
-                      'systimestamp',
-                      'current_timestamp');
+      expr := translate_expression(v_default);
 
       /* insert a row into the columns table */
       INSERT INTO columns (schema, table_name, column_name, oracle_name, position, type_name, oracle_type, nullable, default_value)
@@ -726,7 +738,7 @@ BEGIN
                    '          oracle_tolower(constraint_name),\n'
                    '          "deferrable",\n'
                    '          deferred,\n'
-                   '          lower(condition)\n'
+                   '          translate_expression(condition)\n'
                    '   FROM %I.checks\n'
                    '   WHERE ($1 IS NULL OR schema =ANY ($1))\n'
                    '     AND condition !~ ''^"[^"]*" IS NOT NULL$''\n'

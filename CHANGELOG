@@ -9,6 +9,13 @@ Enhancements:
 
   Per request from "seadba" and Michael Vitale.
 
+- Improve translation of Oracle expressions.
+  The crude method to translate column default expressions and
+  check constraints was not quite sufficient, because converting
+  to lower case mangled string constants.
+
+  Thanks to Jean-Christophe Arnu for the inspiration.
+
 Bugfixes:
 
 - Respect tables.migrate in oracle_migrate_tables.
