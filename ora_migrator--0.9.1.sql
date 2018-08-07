@@ -519,7 +519,10 @@ CREATE FUNCTION translate_expression(s text) RETURNS text
 $$DECLARE
    r text;
 BEGIN
-   FOR r IN SELECT unnest(regexp_match(s, '"([^"]*)"')) LOOP
+   FOR r IN
+      SELECT idents[1]
+      FROM regexp_matches(s, '"([^"]*)"', 'g') AS idents
+   LOOP
       s := replace(s, '"' || r || '"', '"' || oracle_tolower(r) || '"' );
    END LOOP;
    s := regexp_replace(s, '\msysdate\M', 'current_date', 'gi');
