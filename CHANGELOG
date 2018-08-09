@@ -25,6 +25,21 @@ Bugfixes:
   In oracle_migrate_refresh, index expressions were inadvertedly truncated to
   63 bytes.
 
+- Fix ON CONFLICT DO UPDATE error in "table_privs"
+  It can be that an Oracle privilege has been granted to the same user
+  on the same object by different grantors, but the primary key
+  of "table_privs" in the PostgreSQL stage was defined too
+  narrowly for that.
+
+  This leads to an error during migration:
+
+        ERROR: ON CONFLICT DO UPDATE command cannot affect row a second time
+        HINT: Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
+        CONTEXT: SQL statement "INSERT INTO table_privs (schema, table_name, privilege, grantor, grantee, grantable)
+
+
+  Noticed by Charan Chandika.
+
 Version 0.9.0 (beta)  Mar 20 2018
 
 - first release

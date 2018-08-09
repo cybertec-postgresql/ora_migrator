@@ -1192,7 +1192,7 @@ BEGIN
       grantee    name        NOT NULL,
       grantable  boolean     NOT NULL,
       CONSTRAINT table_privs_pkey
-         PRIMARY KEY (schema, table_name, grantee, privilege)
+         PRIMARY KEY (schema, table_name, grantee, privilege, grantor)
    );
 
    CREATE TABLE column_privs (

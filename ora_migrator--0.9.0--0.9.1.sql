@@ -1,6 +1,6 @@
 /* upgrade from version 0.9.0 to 0.9.1 */
 
--- complain if script is sourced in psql, rather than via CREATE EXTENSION
+-- complain if script is sourced in psql, rather than via CREATE/ALTER EXTENSION
 \echo Use "CREATE EXTENSION ora_migrator" to load this file. \quit
 
 CREATE OR REPLACE FUNCTION create_oraviews (
@@ -952,4 +952,259 @@ BEGIN
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 
    RETURN 0;
+END;$$;
+
+CREATE OR REPLACE FUNCTION oracle_migrate_prepare(
+   server         name,
+   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL,
+   max_long       integer DEFAULT 32767
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   old_msglevel text;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* test if the foreign server can be used */
+   BEGIN
+      SELECT extnamespace::regnamespace INTO extschema
+         FROM pg_catalog.pg_extension
+         WHERE extname = 'oracle_fdw';
+      EXECUTE format('SET LOCAL search_path = %I', extschema);
+      PERFORM oracle_diag(server);
+   EXCEPTION
+      WHEN OTHERS THEN
+         RAISE WARNING 'Cannot establish connection with foreign server "%"', server;
+         RAISE;
+   END;
+
+   /* get the "ora_migrator" extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating staging schemas "%" and "%" ...', staging_schema, pgstage_schema;
+   SET LOCAL client_min_messages = warning;
+
+   /* create Oracle staging schema */
+   BEGIN
+      EXECUTE format('CREATE SCHEMA %I', staging_schema);
+   EXCEPTION
+      WHEN insufficient_privilege THEN
+         RAISE insufficient_privilege USING
+            MESSAGE = 'you do not have permission to create a schema in this database';
+      WHEN duplicate_schema THEN
+         RAISE duplicate_schema USING
+            MESSAGE = 'staging schema "' || staging_schema || '" already exists',
+            HINT = 'Drop the staging schema first or use a different one.';
+   END;
+
+   /* create PostgreSQL staging schema */
+   BEGIN
+      EXECUTE format('CREATE SCHEMA %I', pgstage_schema);
+   EXCEPTION
+      WHEN duplicate_schema THEN
+         RAISE duplicate_schema USING
+            MESSAGE = 'staging schema "' || pgstage_schema || '" already exists',
+            HINT = 'Drop the staging schema first or use a different one.';
+   END;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating Oracle metadata views in schema "%" ...', staging_schema;
+   SET LOCAL client_min_messages = warning;
+
+   /* create the migration views in the Oracle staging schema */
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+   PERFORM create_oraviews(server, staging_schema, max_long);
+
+   /* set "search_path" to the PostgreSQL stage */
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* create tables in the PostgreSQL stage */
+   CREATE TABLE columns(
+      schema        name         NOT NULL,
+      table_name    name         NOT NULL,
+      column_name   name         NOT NULL,
+      oracle_name   varchar(128) NOT NULL,
+      position      integer      NOT NULL,
+      type_name     name         NOT NULL,
+      oracle_type   varchar(128) NOT NULL,
+      nullable      boolean      NOT NULL,
+      default_value text,
+      CONSTRAINT columns_pkey
+         PRIMARY KEY (schema, table_name, column_name),
+      CONSTRAINT columns_unique
+         UNIQUE (schema, table_name, column_name, position)
+   );
+
+   CREATE TABLE tables (
+      schema        name         NOT NULL,
+      oracle_schema varchar(128) NOT NULL,
+      table_name    name         NOT NULL,
+      oracle_name   varchar(128) NOT NULL,
+      migrate       boolean      NOT NULL DEFAULT TRUE,
+      CONSTRAINT tables_pkey
+         PRIMARY KEY (schema, table_name)
+   );
+
+   CREATE TABLE checks (
+      schema          name    NOT NULL,
+      table_name      name    NOT NULL,
+      constraint_name name    NOT NULL,
+      "deferrable"    boolean NOT NULL,
+      deferred        boolean NOT NULL,
+      condition       text    NOT NULL,
+      migrate         boolean NOT NULL DEFAULT TRUE,
+      CONSTRAINT checks_pkey
+         PRIMARY KEY (schema, table_name, constraint_name)
+   );
+
+   CREATE TABLE foreign_keys (
+      schema          name    NOT NULL,
+      table_name      name    NOT NULL,
+      constraint_name name    NOT NULL,
+      "deferrable"    boolean NOT NULL,
+      deferred        boolean NOT NULL,
+      delete_rule     text    NOT NULL,
+      column_name     name    NOT NULL,
+      position        integer NOT NULL,
+      remote_schema   name    NOT NULL,
+      remote_table    name    NOT NULL,
+      remote_column   name    NOT NULL,
+      migrate         boolean NOT NULL DEFAULT TRUE,
+      CONSTRAINT foreign_keys_pkey
+         PRIMARY KEY (schema, table_name, constraint_name, position)
+   );
+
+   CREATE TABLE keys (
+      schema          name    NOT NULL,
+      table_name      name    NOT NULL,
+      constraint_name name    NOT NULL,
+      "deferrable"    boolean NOT NULL,
+      deferred        boolean NOT NULL,
+      column_name     name    NOT NULL,
+      position        integer NOT NULL,
+      is_primary      boolean NOT NULL,
+      migrate         boolean NOT NULL DEFAULT TRUE,
+      CONSTRAINT keys_pkey
+         PRIMARY KEY (schema, table_name, constraint_name, position)
+   );
+
+   CREATE TABLE views (
+      schema     name    NOT NULL,
+      view_name  name    NOT NULL,
+      definition text    NOT NULL,
+      oracle_def text    NOT NULL,
+      migrate    boolean NOT NULL DEFAULT TRUE,
+      verified   boolean NOT NULL DEFAULT FALSE,
+      CONSTRAINT views_pkey
+         PRIMARY KEY (schema, view_name)
+   );
+
+   CREATE TABLE functions (
+      schema         name    NOT NULL,
+      function_name  name    NOT NULL,
+      is_procedure   boolean NOT NULL,
+      source         text    NOT NULL,
+      oracle_source  text    NOT NULL,
+      migrate        boolean NOT NULL DEFAULT FALSE,
+      verified       boolean NOT NULL DEFAULT FALSE,
+      CONSTRAINT functions_pkey
+         PRIMARY KEY (schema, function_name)
+   );
+
+   CREATE TABLE sequences (
+      schema        name    NOT NULL,
+      sequence_name name    NOT NULL,
+      min_value     bigint,
+      max_value     bigint,
+      increment_by  bigint  NOT NULL,
+      cyclical      boolean NOT NULL,
+      cache_size    integer NOT NULL,
+      last_value    bigint  NOT NULL,
+      oracle_value  bigint  NOT NULL,
+      CONSTRAINT sequences_pkey
+         PRIMARY KEY (schema, sequence_name)
+   );
+
+   CREATE TABLE index_columns (
+      schema        name NOT NULL,
+      table_name    name NOT NULL,
+      index_name    name NOT NULL,
+      uniqueness    boolean NOT NULL,
+      position      integer NOT NULL,
+      descend       boolean NOT NULL,
+      is_expression boolean NOT NULL,
+      column_name   text    NOT NULL,
+      CONSTRAINT index_columns_pkey
+         PRIMARY KEY (schema, index_name, position)
+   );
+
+   CREATE TABLE schemas (
+      schema name NOT NULL
+         CONSTRAINT schemas_pkey PRIMARY KEY
+   );
+
+   CREATE TABLE triggers (
+      schema            name         NOT NULL,
+      table_name        name         NOT NULL,
+      trigger_name      name         NOT NULL,
+      is_before         boolean      NOT NULL,
+      triggering_event  varchar(227) NOT NULL,
+      for_each_row      boolean      NOT NULL,
+      when_clause       text,
+      referencing_names name         NOT NULL,
+      trigger_body      text         NOT NULL,
+      oracle_source     text         NOT NULL,
+      migrate           boolean      NOT NULL DEFAULT FALSE,
+      verified          boolean      NOT NULL DEFAULT FALSE,
+      CONSTRAINT triggers_pkey
+         PRIMARY KEY (schema, table_name, trigger_name)
+   );
+
+   CREATE TABLE packages (
+      schema       name    NOT NULL,
+      package_name name    NOT NULL,
+      is_body      boolean NOT NULL,
+      source       text    NOT NULL,
+      CONSTRAINT packages_pkey
+         PRIMARY KEY (schema, package_name, is_body)
+   );
+
+   CREATE TABLE table_privs (
+      schema     name        NOT NULL,
+      table_name name        NOT NULL,
+      privilege  varchar(40) NOT NULL,
+      grantor    name        NOT NULL,
+      grantee    name        NOT NULL,
+      grantable  boolean     NOT NULL,
+      CONSTRAINT table_privs_pkey
+         PRIMARY KEY (schema, table_name, grantee, privilege, grantor)
+   );
+
+   CREATE TABLE column_privs (
+      schema      name        NOT NULL,
+      table_name  name        NOT NULL,
+      column_name name        NOT NULL,
+      privilege   varchar(40) NOT NULL,
+      grantor     name        NOT NULL,
+      grantee     name        NOT NULL,
+      grantable   boolean     NOT NULL,
+      CONSTRAINT column_privs_pkey
+         PRIMARY KEY (schema, table_name, column_name, grantee, privilege)
+   );
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   /* copy data from the Oracle stage to the PostgreSQL stage */
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+   RETURN oracle_migrate_refresh(server, staging_schema, pgstage_schema, only_schemas, max_long);
 END;$$;
