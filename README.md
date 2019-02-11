@@ -177,6 +177,10 @@ Objects created by the extension
     values in the Oracle database.  Apart from user data, this also applies
     to view definitions, column default expressions and index expressions.
 
+  - `with_data` (default `TRUE`): specifies if the data should be migrated
+    as well.  If `FALSE`, only the table definitions are migrated.
+    This can speed up testing while developing a migration.
+
   Calling this function is equivalent to calling the following functions
   in this order in a single transaction:
 
@@ -261,6 +265,8 @@ Objects created by the extension
 
   - `t`: The name of the PostgreSQL foreign table.
 
+  - `with_data` (default `TRUE`): should the table data be migrated too?
+
   The return value is TRUE if the operation succeeded, otherwise FALSE.
 
 - Function `oracle_migrate_tables`:
@@ -280,6 +286,10 @@ Objects created by the extension
     that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
+
+  - `with_data` (default `TRUE`): specifies if the data should be migrated
+    as well.  If `FALSE`, only the table definitions are migrated.
+    This can speed up testing while developing a migration.
 
   The return value is the number of captured errors that have been turned
   into warnings.
@@ -484,6 +494,11 @@ it step by step:
 
 - Call `oracle_migrate_finish` to remove the staging schemas and complete
   the migration.
+
+**Hint:** When developing a migration, it will be useful to set the
+parameter `with_data` to false, so that only the object definitions are
+migrated, but not the data.  This will make the migration much faster and
+is useful for debugging problems that are not connected with the table data.
 
 Apart from migration, you can use the function `create_oraviews` to create
 foreign tables and views that allow convenient access to Oracle metadata

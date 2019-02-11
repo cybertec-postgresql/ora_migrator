@@ -17,7 +17,7 @@ CREATE ROLE migrator LOGIN;
 
 /* create all requisite extensions */
 CREATE EXTENSION oracle_fdw;
-CREATE EXTENSION ora_migrator;
+CREATE EXTENSION ora_migrator VERSION;
 
 /* create a foreign server and a user mapping */
 CREATE SERVER oracle FOREIGN DATA WRAPPER oracle_fdw

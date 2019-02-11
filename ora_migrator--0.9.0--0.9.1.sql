@@ -522,12 +522,59 @@ BEGIN
    RETURN s;
 END;$$;
 
-COMMENT ON FUNCTION translate_expression(text) IS 'helper function to translate Oracle SQL expressions to PostgreSQL';
+DROP FUNCTION oracle_materialize(name, name);
 
-CREATE OR REPLACE FUNCTION oracle_migrate_tables(
+CREATE FUNCTION oracle_materialize(
+   s name,
+   t name,
+   with_data boolean DEFAULT TRUE
+) RETURNS boolean
+   LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   ft     name;
+   errmsg text;
+   detail text;
+BEGIN
+   BEGIN
+      /* rename the foreign table */
+      ft := t || E'\x07';
+      EXECUTE format('ALTER FOREIGN TABLE %I.%I RENAME TO %I', s, t, ft);
+
+      /* create a table */
+      EXECUTE format('CREATE TABLE %I.%I (LIKE %I.%I)', s, t, s, ft);
+
+      /* move the data if desired */
+      IF with_data THEN
+         EXECUTE format('INSERT INTO %I.%I SELECT * FROM %I.%I', s, t, s, ft);
+      END IF;
+
+      /* drop the foreign table */
+      EXECUTE format('DROP FOREIGN TABLE %I.%I', s, ft);
+
+      RETURN TRUE;
+   EXCEPTION
+      WHEN others THEN
+         /* turn the error into a warning */
+         GET STACKED DIAGNOSTICS
+            errmsg := MESSAGE_TEXT,
+            detail := PG_EXCEPTION_DETAIL;
+         RAISE WARNING 'Error loading table data for %.%', s, t
+            USING DETAIL = errmsg || coalesce(': ' || detail, '');
+   END;
+
+   RETURN FALSE;
+END;$$;
+
+COMMENT ON FUNCTION oracle_materialize(name, name, boolean) IS
+   'turn an Oracle foreign table into a PostgreSQL table';
+
+DROP FUNCTION oracle_migrate_tables(name, name, name[]);
+
+CREATE FUNCTION oracle_migrate_tables(
    staging_schema name    DEFAULT NAME 'ora_stage',
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
-   only_schemas   name[]  DEFAULT NULL
+   only_schemas   name[]  DEFAULT NULL,
+   with_data      boolean DEFAULT TRUE
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
@@ -563,7 +610,7 @@ BEGIN
       SET LOCAL client_min_messages = warning;
 
       /* turn that foreign table into a real table */
-      IF NOT oracle_materialize(sch, tab) THEN
+      IF NOT oracle_materialize(sch, tab, with_data) THEN
          rc := rc + 1;
          /* remove the foreign table if it failed */
          EXECUTE format('DROP FOREIGN TABLE %I.%I', sch, tab);
@@ -575,6 +622,9 @@ BEGIN
 
    RETURN rc;
 END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[], boolean) IS
+   'third step of "oracle_migrate": copy tables from Oracle';
 
 CREATE OR REPLACE FUNCTION oracle_migrate_refresh(
    server         name,
@@ -1208,3 +1258,80 @@ BEGIN
    EXECUTE format('SET LOCAL search_path = %I', extschema);
    RETURN oracle_migrate_refresh(server, staging_schema, pgstage_schema, only_schemas, max_long);
 END;$$;
+
+DROP FUNCTION oracle_migrate(name, name, name, name[], integer);
+
+CREATE FUNCTION oracle_migrate(
+   server         name,
+   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL,
+   max_long       integer DEFAULT 32767,
+   with_data      boolean DEFAULT TRUE
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema name;
+   rc        integer := 0;
+BEGIN
+   /* set "search_path" to the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I', extschema);
+
+   /*
+    * First step:
+    * Create staging schema and define the oracle metadata views there.
+    */
+   rc := rc + oracle_migrate_prepare(server, staging_schema, pgstage_schema, only_schemas, max_long);
+
+   /*
+    * Second step:
+    * Create the destination schemas and the foreign tables and sequences there.
+    */
+   rc := rc + oracle_migrate_mkforeign(server, staging_schema, pgstage_schema, only_schemas, max_long);
+
+   /*
+    * Third step:
+    * Copy the tables over from Oracle.
+    */
+   rc := rc + oracle_migrate_tables(staging_schema, pgstage_schema, only_schemas, with_data);
+
+   /*
+    * Fourth step:
+    * Create functions (this won't do anything since they have "migrate = FALSE").
+    */
+   rc := rc + oracle_migrate_functions(pgstage_schema, only_schemas);
+
+   /*
+    * Fifth step:
+    * Create triggers (this won't do anything since they have "migrate = FALSE").
+    */
+   rc := rc + oracle_migrate_triggers(pgstage_schema, only_schemas);
+
+   /*
+    * Sixth step:
+    * Create views.
+    */
+   rc := rc + oracle_migrate_views(pgstage_schema, only_schemas);
+
+   /*
+    * Seventh step:
+    * Create constraints and indexes.
+    */
+   rc := rc + oracle_migrate_constraints(pgstage_schema, only_schemas);
+
+   /*
+    * Final step:
+    * Drop the staging schema.
+    */
+   rc := rc + oracle_migrate_finish(staging_schema, pgstage_schema);
+
+   RAISE NOTICE 'Migration completed with % errors.', rc;
+
+   RETURN rc;
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate(name, name, name, name[], integer, boolean) IS
+   'migrate an Oracle database from a foreign server to PostgreSQL';

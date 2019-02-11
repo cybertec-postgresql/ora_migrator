@@ -505,14 +505,16 @@ BEGIN
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 END;$$;
 
-COMMENT ON FUNCTION create_oraviews(name, name, integer) IS 'create Oracle foreign tables for the metadata of a foreign server';
+COMMENT ON FUNCTION create_oraviews(name, name, integer) IS
+   'create Oracle foreign tables for the metadata of a foreign server';
 
 /* this will silently truncate anything exceeding 63 bytes ...*/
 CREATE FUNCTION oracle_tolower(text) RETURNS name
    LANGUAGE sql STABLE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 'SELECT CASE WHEN $1 = upper($1) THEN lower($1)::name ELSE $1::name END';
 
-COMMENT ON FUNCTION oracle_tolower(text) IS 'helper function to fold Oracle names to lower case';
+COMMENT ON FUNCTION oracle_tolower(text) IS
+   'helper function to fold Oracle names to lower case';
 
 CREATE FUNCTION translate_expression(s text) RETURNS text
    LANGUAGE plpgsql IMMUTABLE STRICT SET search_path FROM CURRENT AS
@@ -531,7 +533,8 @@ BEGIN
    RETURN s;
 END;$$;
 
-COMMENT ON FUNCTION translate_expression(text) IS 'helper function to translate Oracle SQL expressions to PostgreSQL';
+COMMENT ON FUNCTION translate_expression(text) IS
+   'helper function to translate Oracle SQL expressions to PostgreSQL';
 
 CREATE FUNCTION adjust_to_bigint(numeric) RETURNS bigint
    LANGUAGE sql STABLE CALLED ON NULL INPUT SET search_path = pg_catalog AS
@@ -544,7 +547,8 @@ $$SELECT CASE WHEN $1 < -9223372036854775808
 
 CREATE FUNCTION oracle_materialize(
    s name,
-   t name
+   t name,
+   with_data boolean DEFAULT TRUE
 ) RETURNS boolean
    LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
 $$DECLARE
@@ -557,9 +561,13 @@ BEGIN
       ft := t || E'\x07';
       EXECUTE format('ALTER FOREIGN TABLE %I.%I RENAME TO %I', s, t, ft);
 
-      /* create a table and fill it */
+      /* create a table */
       EXECUTE format('CREATE TABLE %I.%I (LIKE %I.%I)', s, t, s, ft);
-      EXECUTE format('INSERT INTO %I.%I SELECT * FROM %I.%I', s, t, s, ft);
+
+      /* move the data if desired */
+      IF with_data THEN
+         EXECUTE format('INSERT INTO %I.%I SELECT * FROM %I.%I', s, t, s, ft);
+      END IF;
 
       /* drop the foreign table */
       EXECUTE format('DROP FOREIGN TABLE %I.%I', s, ft);
@@ -578,7 +586,8 @@ BEGIN
    RETURN FALSE;
 END;$$;
 
-COMMENT ON FUNCTION oracle_materialize(name, name) IS 'turn an Oracle foreign table into a PostgreSQL table';
+COMMENT ON FUNCTION oracle_materialize(name, name, boolean) IS
+   'turn an Oracle foreign table into a PostgreSQL table';
 
 CREATE FUNCTION oracle_migrate_refresh(
    server         name,
@@ -958,7 +967,8 @@ BEGIN
    RETURN 0;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_refresh(name, name, name, name[], integer) IS 'update the PostgreSQL stage with values from the Oracle stage';
+COMMENT ON FUNCTION oracle_migrate_refresh(name, name, name, name[], integer) IS
+  'update the PostgreSQL stage with values from the Oracle stage';
 
 CREATE FUNCTION oracle_migrate_prepare(
    server         name,
@@ -1215,7 +1225,8 @@ BEGIN
    RETURN oracle_migrate_refresh(server, staging_schema, pgstage_schema, only_schemas, max_long);
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name, name[], integer) IS 'first step of "oracle_migrate": create and populate staging schemas';
+COMMENT ON FUNCTION oracle_migrate_prepare(name, name, name, name[], integer) IS
+   'first step of "oracle_migrate": create and populate staging schemas';
 
 CREATE FUNCTION oracle_migrate_mkforeign(
    server         name,
@@ -1407,12 +1418,14 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_mkforeign(name, name, name, name[], integer) IS 'second step of "oracle_migrate": create schemas, sequemces and foreign tables';
+COMMENT ON FUNCTION oracle_migrate_mkforeign(name, name, name, name[], integer) IS
+   'second step of "oracle_migrate": create schemas, sequemces and foreign tables';
 
 CREATE FUNCTION oracle_migrate_tables(
    staging_schema name    DEFAULT NAME 'ora_stage',
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
-   only_schemas   name[]  DEFAULT NULL
+   only_schemas   name[]  DEFAULT NULL,
+   with_data      boolean DEFAULT TRUE
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
@@ -1448,7 +1461,7 @@ BEGIN
       SET LOCAL client_min_messages = warning;
 
       /* turn that foreign table into a real table */
-      IF NOT oracle_materialize(sch, tab) THEN
+      IF NOT oracle_materialize(sch, tab, with_data) THEN
          rc := rc + 1;
          /* remove the foreign table if it failed */
          EXECUTE format('DROP FOREIGN TABLE %I.%I', sch, tab);
@@ -1461,7 +1474,8 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[]) IS 'third step of "oracle_migrate": copy tables from Oracle';
+COMMENT ON FUNCTION oracle_migrate_tables(name, name, name[], boolean) IS
+   'third step of "oracle_migrate": copy tables from Oracle';
 
 CREATE FUNCTION oracle_migrate_functions(
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
@@ -1522,7 +1536,8 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_functions(name, name[]) IS 'fourth step of "oracle_migrate": create functions';
+COMMENT ON FUNCTION oracle_migrate_functions(name, name[]) IS
+   'fourth step of "oracle_migrate": create functions';
 
 CREATE FUNCTION oracle_migrate_triggers(
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
@@ -1598,7 +1613,8 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_triggers(name, name[]) IS 'fifth step of "oracle_migrate": create triggers';
+COMMENT ON FUNCTION oracle_migrate_triggers(name, name[]) IS
+   'fifth step of "oracle_migrate": create triggers';
 
 CREATE FUNCTION oracle_migrate_views(
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
@@ -1678,7 +1694,8 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_views(name, name[]) IS 'sixth step of "oracle_migrate": create views';
+COMMENT ON FUNCTION oracle_migrate_views(name, name[]) IS
+   'sixth step of "oracle_migrate": create views';
 
 CREATE FUNCTION oracle_migrate_constraints(
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
@@ -2006,7 +2023,8 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_constraints(name, name[]) IS 'seventh step of "oracle_migrate": create constraints and indexes';
+COMMENT ON FUNCTION oracle_migrate_constraints(name, name[])
+   IS 'seventh step of "oracle_migrate": create constraints and indexes';
 
 CREATE FUNCTION oracle_migrate_finish(
    staging_schema name    DEFAULT NAME 'ora_stage',
@@ -2032,14 +2050,16 @@ BEGIN
    RETURN 0;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_finish(name, name) IS 'final step of "oracle_migrate": drop staging schema';
+COMMENT ON FUNCTION oracle_migrate_finish(name, name) IS
+   'final step of "oracle_migrate": drop staging schema';
 
 CREATE FUNCTION oracle_migrate(
    server         name,
    staging_schema name    DEFAULT NAME 'ora_stage',
    pgstage_schema name    DEFAULT NAME 'pgsql_stage',
    only_schemas   name[]  DEFAULT NULL,
-   max_long       integer DEFAULT 32767
+   max_long       integer DEFAULT 32767,
+   with_data      boolean DEFAULT TRUE
 ) RETURNS integer
    LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
 $$DECLARE
@@ -2068,7 +2088,7 @@ BEGIN
     * Third step:
     * Copy the tables over from Oracle.
     */
-   rc := rc + oracle_migrate_tables(staging_schema, pgstage_schema, only_schemas);
+   rc := rc + oracle_migrate_tables(staging_schema, pgstage_schema, only_schemas, with_data);
 
    /*
     * Fourth step:
@@ -2105,7 +2125,8 @@ BEGIN
    RETURN rc;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate(name, name, name, name[], integer) IS 'migrate an Oracle database from a foreign server to PostgreSQL';
+COMMENT ON FUNCTION oracle_migrate(name, name, name, name[], integer, boolean) IS
+   'migrate an Oracle database from a foreign server to PostgreSQL';
 
 CREATE FUNCTION quote_xml(text) RETURNS text
    LANGUAGE sql IMMUTABLE STRICT AS
@@ -2270,4 +2291,5 @@ BEGIN
    RETURN result::xml;
 END$$;
 
-COMMENT ON FUNCTION oracle_export(text, name, name[]) IS 'export metadata to an XML file';
+COMMENT ON FUNCTION oracle_export(text, name, name[]) IS
+   'export metadata to an XML file';
