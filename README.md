@@ -83,6 +83,8 @@ the Oracle database, the rest of the data were migrated successfully.
 Prerequisites
 =============
 
+- You need PostgreSQL 9.5 or later.
+
 - The oracle_fdw extension must be installed.
 
 - A foreign server must be defined for the Oracle database you want
