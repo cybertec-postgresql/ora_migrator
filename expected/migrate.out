@@ -74,9 +74,11 @@ SELECT oracle_migrate_mkforeign(
 SELECT oracle_migrate_tables(
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
 );
+WARNING:  Error loading table data for testschema1.baddata
+DETAIL:  invalid byte sequence for encoding "UTF8": 0x00: 
  oracle_migrate_tables 
 -----------------------
-                     0
+                     1
 (1 row)
 
 SELECT oracle_migrate_constraints(
@@ -111,17 +113,18 @@ SELECT oracle_migrate_views(
                     0
 (1 row)
 
+/* we have to check the log table before we drop the schema */
+SELECT operation, schema_name, object_name, failed_sql, error_message
+FROM pgsql_stage.migrate_log
+ORDER BY log_time;
+    operation    | schema_name | object_name |                               failed_sql                                |                   error_message                   
+-----------------+-------------+-------------+-------------------------------------------------------------------------+---------------------------------------------------
+ copy table data | testschema1 | baddata     | INSERT INTO testschema1.baddata SELECT * FROM testschema1."baddata\x07" | invalid byte sequence for encoding "UTF8": 0x00: 
+(1 row)
+
 SELECT oracle_migrate_finish();
  oracle_migrate_finish 
 -----------------------
                      0
 (1 row)
-
-/* we have to check the temporary log table in the same session */
-SELECT operation, schema_name, object_name, failed_sql, error_message
-FROM migrate_log
-ORDER BY log_time;
- operation | schema_name | object_name | failed_sql | error_message 
------------+-------------+-------------+------------+---------------
-(0 rows)
 

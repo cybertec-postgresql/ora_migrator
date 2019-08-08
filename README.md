@@ -47,12 +47,12 @@ will belong to this user:
     NOTICE:  Migrating table laurenz.ft_speed_sa ...
     NOTICE:  Migrating table laurenz.badstring ...
     WARNING:  Error loading table data for laurenz.badstring
-    DETAIL:  invalid byte sequence for encoding "UTF8": 0x80: 
+    DETAIL:  invalid byte sequence for encoding "UTF8": 0x80:
     NOTICE:  Migrating table laurenz.datetest ...
     NOTICE:  Migrating table laurenz.department ...
     NOTICE:  Migrating table laurenz.hasnul ...
     WARNING:  Error loading table data for laurenz.hasnul
-    DETAIL:  invalid byte sequence for encoding "UTF8": 0x00: 
+    DETAIL:  invalid byte sequence for encoding "UTF8": 0x00:
     NOTICE:  Migrating table social.blog ...
     NOTICE:  Migrating table laurenz.employee ...
     NOTICE:  Migrating table laurenz.identity ...
@@ -61,16 +61,16 @@ will belong to this user:
     NOTICE:  Migrating table laurenz.numbers ...
     NOTICE:  Creating UNIQUE and PRIMARY KEY constraints ...
     WARNING:  Error creating primary key or unique constraint on table laurenz.badstring
-    DETAIL:  relation "laurenz.badstring" does not exist: 
+    DETAIL:  relation "laurenz.badstring" does not exist:
     WARNING:  Error creating primary key or unique constraint on table laurenz.hasnul
-    DETAIL:  relation "laurenz.hasnul" does not exist: 
+    DETAIL:  relation "laurenz.hasnul" does not exist:
     NOTICE:  Creating FOREIGN KEY constraints ...
     NOTICE:  Creating CHECK constraints ...
     NOTICE:  Creating indexes ...
     NOTICE:  Setting column default values ...
     NOTICE:  Dropping staging schemas ...
     NOTICE:  Migration completed with 4 errors.
-     oracle_migrate 
+     oracle_migrate
     ----------------
                   4
     (1 row)
@@ -116,7 +116,7 @@ Prerequisites
 
   Additionally, `SELECT` privileges on the following dictionary views are
   required by some oth the views created by `create_oraviews`:
-  
+
   - `DBA_PROCEDURES`
   - `DBA_SOURCE`
   - `DBA_TAB_PRIVS`
@@ -269,6 +269,9 @@ Objects created by the extension
 
   - `with_data` (default `TRUE`): should the table data be migrated too?
 
+  - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
+    created by `oracle_migrate_prepare`.
+
   The return value is TRUE if the operation succeeded, otherwise FALSE.
 
 - Function `oracle_migrate_tables`:
@@ -381,27 +384,6 @@ Objects created by the extension
   The return value is the number of captured errors that have been turned
   into warnings.
 
-- Function `oracle_export`:
-
-  Exports the metadata in the PostgreSQL staging schema as XML file.
-
-  This XML file does not contain the complete information; it is intended as
-  input for software that automatically designs an application based on
-  a database schema.
-
-  The parameters are:
-
-  - `application_name` (default `application`): The name of the application
-
-  - `pgstage_schema` (default `pgsql_stage`): The name of the staging
-    schema created by `oracle_migrate_prepare`.
-
-  - `only_schemas` (default NULL): An array of Oracle schema names
-    that should be exported.
-    The names must be as they appear in Oracle, which is usually in upper case.
-
-  The function returns a value of type `xml` that contains the information.
-
 - Function `create_oraviews`:
 
   This function creates a number of foreign tables and views for
@@ -499,8 +481,9 @@ it step by step:
 
 Any errors (except Oracle connection errors) that happen during the
 migration will not terminate processing.  Rather, they will be reported
-as warnings.  Additionally, such errors are logged in the temporary
-table `migrate_log` for automatic processing in the same database session.
+as warnings.  Additionally, such errors are logged in the table `migrate_log`
+in the PostgreSQL staging schema.
+
 Later errors can be consequences of earlier errors: for example, any
 failure to migrate an Oracle table will also make all views and constraints
 that depend on that table fail.
@@ -515,7 +498,7 @@ foreign tables and views that allow convenient access to Oracle metadata
 from PostgreSQL.
 
 This is used by `oracle_migrate_prepare` to populate the staging schema,
-but it may be useful for other tools.
+but it may also be useful for other tools.
 
 These foreign tables can be used in arbitrary queries, e.g.
 

@@ -98,9 +98,9 @@ SELECT oracle_migrate_views(
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
 );
 
-SELECT oracle_migrate_finish();
-
-/* we have to check the temporary log table in the same session */
+/* we have to check the log table before we drop the schema */
 SELECT operation, schema_name, object_name, failed_sql, error_message
-FROM migrate_log
+FROM pgsql_stage.migrate_log
 ORDER BY log_time;
+
+SELECT oracle_migrate_finish();

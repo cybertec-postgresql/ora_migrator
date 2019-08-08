@@ -109,6 +109,16 @@ CREATE VIEW view1 AS
    SELECT tab1.vc, tab2.c
    FROM tab1 LEFT JOIN tab2 ON tab1.id = tab2.tab1_id;
 
+/* this will fail because there is a zero byte in the data */
+CREATE TABLE baddata (
+   value  VARCHAR2(20 CHAR)
+) SEGMENT CREATION IMMEDIATE;
+
+INSERT INTO baddata (value)
+   VALUES ('contains' || chr(0) || 'zero');
+
+COMMIT;
+
 /* connect as "testschema1" to create some objects */
 CONNECT testschema2/good_password
 
