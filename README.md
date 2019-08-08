@@ -259,7 +259,7 @@ Objects created by the extension
 
   Replaces a foreign table with a real table and migrates the contents.  
   This function is used internally by `oracle_migrate_tables`, but can be
-  useful to parallelize migration (see the "Usage" section).
+  useful to parallelize migration (see the [Usage](#usage) section).
 
   The parameters are:
 
@@ -496,6 +496,14 @@ it step by step:
 
 - Call `oracle_migrate_finish` to remove the staging schemas and complete
   the migration.
+
+Any errors (except Oracle connection errors) that happen during the
+migration will not terminate processing.  Rather, they will be reported
+as warnings.  Additionally, such errors are logged in the temporary
+table `migrate_log` for automatic processing in the same database session.
+Later errors can be consequences of earlier errors: for example, any
+failure to migrate an Oracle table will also make all views and constraints
+that depend on that table fail.
 
 **Hint:** When developing a migration, it will be useful to set the
 parameter `with_data` to false, so that only the object definitions are

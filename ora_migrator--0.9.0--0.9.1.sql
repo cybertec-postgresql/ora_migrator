@@ -535,6 +535,16 @@ $$DECLARE
    errmsg text;
    detail text;
 BEGIN
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
    BEGIN
       /* rename the foreign table */
       ft := t || E'\x07';
@@ -560,6 +570,14 @@ BEGIN
             detail := PG_EXCEPTION_DETAIL;
          RAISE WARNING 'Error loading table data for %.%', s, t
             USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+         /* we assume that the table was created by the calling function */
+         INSERT INTO migrate_log
+            (operation, schema_name, object_name, failed_sql, error_message)
+         VALUES ('copy table data', s, t,
+                 format('INSERT INTO %I.%I SELECT * FROM %I.%I', s, t, s, ft),
+                 errmsg || coalesce(': ' || detail, '')
+                );
    END;
 
    RETURN FALSE;
@@ -1257,6 +1275,904 @@ BEGIN
    /* copy data from the Oracle stage to the PostgreSQL stage */
    EXECUTE format('SET LOCAL search_path = %I', extschema);
    RETURN oracle_migrate_refresh(server, staging_schema, pgstage_schema, only_schemas, max_long);
+END;$$;
+
+CREATE OR REPLACE FUNCTION oracle_migrate_mkforeign(
+   server         name,
+   staging_schema name    DEFAULT NAME 'ora_stage',
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL,
+   max_long       integer DEFAULT 32767
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   s            name;
+   t            name;
+   sch          name;
+   seq          name;
+   minv         numeric;
+   maxv         numeric;
+   incr         numeric;
+   cycl         boolean;
+   cachesiz     integer;
+   lastval      numeric;
+   tab          name;
+   colname      name;
+   typ          text;
+   pos          integer;
+   nul          boolean;
+   fsch         text;
+   ftab         text;
+   o_fsch       text;
+   o_ftab       text;
+   o_sch        name;
+   o_tab        name;
+   stmt         text;
+   separator    text;
+   old_msglevel text;
+   errmsg       text;
+   detail       text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the PostgreSQL staging schema and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating schemas ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
+   /* loop through the schemas that should be migrated */
+   FOR s IN
+      SELECT schema FROM schemas
+      WHERE only_schemas IS NULL
+         OR schema =ANY (only_schemas)
+   LOOP
+      BEGIN
+         /* create schema */
+         EXECUTE format('CREATE SCHEMA %I', s);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating schema "%"', s
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create schema', s, '',
+                    format('CREATE SCHEMA %I', s),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating sequences ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all sequences */
+   FOR sch, seq, minv, maxv, incr, cycl, cachesiz, lastval IN
+      SELECT schema, sequence_name, min_value, max_value, increment_by, cyclical, cache_size, last_value
+         FROM sequences
+      WHERE only_schemas IS NULL
+         OR schema =ANY (only_schemas)
+   LOOP
+      BEGIN
+      EXECUTE format('CREATE SEQUENCE %I.%I INCREMENT %s MINVALUE %s MAXVALUE %s START %s CACHE %s %sCYCLE',
+                     sch, seq, incr, minv, maxv, lastval + 1, cachesiz,
+                     CASE WHEN cycl THEN '' ELSE 'NO ' END);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating sequence %.%', sch, seq
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create sequence', sch, seq,
+                    format('CREATE SEQUENCE %I.%I INCREMENT %s MINVALUE %s MAXVALUE %s START %s CACHE %s %sCYCLE',
+                           sch, seq, incr, minv, maxv, lastval + 1, cachesiz,
+                           CASE WHEN cycl THEN '' ELSE 'NO ' END),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating foreign tables ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* create foreign tables */
+   o_sch := '';
+   o_tab := '';
+   stmt := '';
+   separator := '';
+   FOR sch, tab, colname, pos, typ, nul, fsch, ftab IN
+      EXECUTE format(
+         E'SELECT schema,\n'
+          '       table_name,\n'
+          '       pc.column_name,\n'
+          '       pc.position,\n'
+          '       pc.type_name,\n'
+          '       pc.nullable,\n'
+          '       pt.oracle_schema,\n'
+          '       pt.oracle_name\n'
+          'FROM columns pc\n'
+          '   JOIN tables pt\n'
+          '      USING (schema, table_name)\n'
+          'WHERE pt.migrate\n'
+          'ORDER BY schema, table_name, pc.position',
+         staging_schema)
+   LOOP
+      IF o_sch <> sch OR o_tab <> tab THEN
+         IF o_tab <> '' THEN
+            BEGIN
+               EXECUTE stmt || format(E') SERVER %I\n'
+                                       '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'', max_long ''%s'')',
+                                      server, o_fsch, o_ftab, max_long);
+            EXCEPTION
+               WHEN others THEN
+                  /* turn the error into a warning */
+                  GET STACKED DIAGNOSTICS
+                     errmsg := MESSAGE_TEXT,
+                     detail := PG_EXCEPTION_DETAIL;
+                  RAISE WARNING 'Error creating foreign table %.%', sch, tab
+                     USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+                  INSERT INTO migrate_log
+                     (operation, schema_name, object_name, failed_sql, error_message)
+                  VALUES ('create foreign table', sch, tab,
+                          stmt || format(E') SERVER %I\n'
+                                          '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'', max_long ''%s'')',
+                                         server, o_fsch, o_ftab, max_long),
+                          errmsg || coalesce(': ' || detail, '')
+                         );
+
+                  rc := rc + 1;
+            END;
+         END IF;
+
+         stmt := format(E'CREATE FOREIGN TABLE %I.%I (\n', sch, tab);
+         o_sch := sch;
+         o_tab := tab;
+         o_fsch := fsch;
+         o_ftab := ftab;
+         separator := '';
+      END IF;
+
+      stmt := stmt || format(E'   %s%I %s%s\n',
+                             separator, colname, typ,
+                             CASE WHEN nul THEN '' ELSE ' NOT NULL' END);
+      separator := ', ';
+   END LOOP;
+
+   /* last foreign table */
+   IF o_tab <> '' THEN
+      BEGIN
+         EXECUTE stmt || format(E') SERVER %I\n'
+                                 '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'', max_long ''%s'')',
+                                server, o_fsch, o_ftab, max_long);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating foreign table %.%', sch, tab
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+               INSERT INTO migrate_log
+                  (operation, schema_name, object_name, failed_sql, error_message)
+               VALUES ('create foreign table', sch, tab,
+                       stmt || format(E') SERVER %I\n'
+                                       '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'', max_long ''%s'')',
+                                      server, o_fsch, o_ftab, max_long),
+                       errmsg || coalesce(': ' || detail, '')
+                      );
+
+            rc := rc + 1;
+      END;
+   END IF;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+CREATE OR REPLACE FUNCTION oracle_migrate_functions(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog SET check_function_bodies = off AS
+$$DECLARE
+   extschema    name;
+   sch          name;
+   fname        name;
+   src          text;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the Oracle stage and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+   FOR sch, fname, src IN
+      SELECT schema, function_name, source
+      FROM functions
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND migrate
+   LOOP
+      BEGIN
+         /* set "search_path" so that the function can be created without schema */
+         EXECUTE format('SET LOCAL search_path = %I', sch);
+
+         EXECUTE 'CREATE ' || src;
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating function %.%', sch, fname
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create function', sch, fname,
+                    'CREATE ' || src,
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+CREATE OR REPLACE FUNCTION oracle_migrate_triggers(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog SET check_function_bodies = off AS
+$$DECLARE
+   extschema    name;
+   sch          name;
+   tabname      name;
+   trigname     name;
+   bef          boolean;
+   event        text;
+   eachrow      boolean;
+   whencl       text;
+   ref          text;
+   src          text;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the Oracle stage and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+   FOR sch, tabname, trigname, bef, event, eachrow, whencl, ref, src IN
+      SELECT schema, table_name, trigger_name, is_before, triggering_event,
+             for_each_row, when_clause, referencing_names, trigger_body
+      FROM triggers
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND migrate
+   LOOP
+      BEGIN
+         /* create the trigger function */
+         EXECUTE format(E'CREATE OR REPLACE FUNCTION %I.%I() RETURNS trigger LANGUAGE plpgsql AS\n$_f_$%s$_f_$',
+                        sch, trigname, src);
+         /* create the trigger itself */
+         EXECUTE format(E'CREATE TRIGGER %I %s %s ON %I.%I FOR EACH %s\n'
+                        '   EXECUTE PROCEDURE %I.%I()',
+                        trigname,
+                        CASE WHEN bef THEN 'BEFORE' ELSE 'AFTER' END,
+                        event,
+                        sch, tabname,
+                        CASE WHEN eachrow THEN 'ROW' ELSE 'STATEMENT' END,
+                        sch, trigname);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating trigger % on %.%', trigname, sch, tabname
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create trigger', sch, tabname,
+                    format(E'CREATE OR REPLACE FUNCTION %I.%I() RETURNS trigger LANGUAGE plpgsql AS\n$_f_$%s$_f_$',
+                           sch, trigname, src) || E';\n' ||
+                    format(E'CREATE TRIGGER %I %s %s ON %I.%I FOR EACH %s\n'
+                           '   EXECUTE PROCEDURE %I.%I()',
+                           trigname,
+                           CASE WHEN bef THEN 'BEFORE' ELSE 'AFTER' END,
+                           event,
+                           sch, tabname,
+                           CASE WHEN eachrow THEN 'ROW' ELSE 'STATEMENT' END,
+                           sch, trigname),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+CREATE OR REPLACE FUNCTION oracle_migrate_views(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   sch          name;
+   vname        name;
+   col          name;
+   src          text;
+   stmt         text;
+   separator    text;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the Oracle stage and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+   FOR sch, vname, src IN
+      SELECT schema, view_name, definition
+      FROM views
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND migrate
+   LOOP
+      stmt := format(E'CREATE VIEW %I.%I (', sch, vname);
+      separator := E'\n   ';
+      FOR col IN
+         SELECT column_name
+            FROM columns
+            WHERE schema = sch
+              AND table_name = vname
+            ORDER BY position
+      LOOP
+         stmt := stmt || separator || quote_ident(col);
+         separator := E',\n   ';
+      END LOOP;
+      stmt := stmt || E'\n) AS ' || src;
+
+      BEGIN
+         /* set "search_path" so that the function body can reference objects without schema */
+         EXECUTE format('SET LOCAL search_path = %I', sch);
+
+         EXECUTE stmt;
+
+         EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating view %.%', sch, vname
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create view', sch, vname,
+                    stmt,
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
+END;$$;
+
+CREATE OR REPLACE FUNCTION oracle_migrate_constraints(
+   pgstage_schema name    DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS integer
+   LANGUAGE plpgsql VOLATILE CALLED ON NULL INPUT SET search_path = pg_catalog AS
+$$DECLARE
+   extschema    name;
+   stmt         text;
+   stmt_middle  text;
+   stmt_suffix  text;
+   separator    text;
+   old_s        name;
+   old_t        name;
+   old_c        name;
+   loc_s        name;
+   loc_t        name;
+   ind_name     name;
+   cons_name    name;
+   candefer     boolean;
+   is_deferred  boolean;
+   delrule      text;
+   colname      name;
+   colpos       integer;
+   rem_s        name;
+   rem_t        name;
+   rem_colname  name;
+   prim         boolean;
+   expr         text;
+   uniq         boolean;
+   des          boolean;
+   is_expr      boolean;
+   errmsg       text;
+   detail       text;
+   old_msglevel text;
+   rc           integer := 0;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   /* set "search_path" to the PostgreSQL staging schema and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating UNIQUE and PRIMARY KEY constraints ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
+   /* loop through all key constraint columns */
+   old_s := '';
+   old_t := '';
+   old_c := '';
+   FOR loc_s, loc_t, cons_name, candefer, is_deferred, colname, colpos, prim IN
+      SELECT schema, table_name, k.constraint_name, k."deferrable", k.deferred,
+             k.column_name, k.position, k.is_primary
+      FROM keys k
+         JOIN tables t
+            USING (schema, table_name)
+      WHERE (only_schemas IS NULL
+         OR k.schema =ANY (only_schemas))
+        AND t.migrate
+        AND k.migrate
+      ORDER BY schema, table_name, k.constraint_name, k.position
+   LOOP
+      IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
+         IF old_t <> '' THEN
+            BEGIN
+                  EXECUTE stmt || stmt_suffix;
+            EXCEPTION
+               WHEN others THEN
+                  /* turn the error into a warning */
+                  GET STACKED DIAGNOSTICS
+                     errmsg := MESSAGE_TEXT,
+                     detail := PG_EXCEPTION_DETAIL;
+                  RAISE WARNING 'Error creating primary key or unique constraint on table %.%', old_s, old_t
+                     USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+                  INSERT INTO migrate_log
+                     (operation, schema_name, object_name, failed_sql, error_message)
+                  VALUES ('unique constraint', old_s, old_t,
+                          stmt || stmt_suffix,
+                          errmsg || coalesce(': ' || detail, '')
+                         );
+
+                  rc := rc + 1;
+            END;
+         END IF;
+
+         stmt := format('ALTER TABLE %I.%I ADD %s (', loc_s, loc_t,
+                        CASE WHEN prim THEN 'PRIMARY KEY' ELSE 'UNIQUE' END);
+         stmt_suffix := format(')%s DEFERRABLE INITIALLY %s',
+                              CASE WHEN candefer THEN '' ELSE ' NOT' END,
+                              CASE WHEN is_deferred THEN 'DEFERRED' ELSE 'IMMEDIATE' END);
+         old_s := loc_s;
+         old_t := loc_t;
+         old_c := cons_name;
+         separator := '';
+      END IF;
+
+      stmt := stmt || separator || format('%I', colname);
+      separator := ', ';
+   END LOOP;
+
+   IF old_t <> '' THEN
+      BEGIN
+         EXECUTE stmt || stmt_suffix;
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
+                          old_s, old_t
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('unique constraint', old_s, old_t,
+                    stmt || stmt_suffix,
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END IF;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating FOREIGN KEY constraints ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all foreign key constraint columns */
+   old_s := '';
+   old_t := '';
+   old_c := '';
+   FOR loc_s, loc_t, cons_name, candefer, is_deferred, delrule,
+       colname, colpos, rem_s, rem_t, rem_colname IN
+      SELECT fk.schema, fk.table_name, fk.constraint_name, fk."deferrable", fk.deferred, fk.delete_rule,
+             fk.column_name, fk.position, fk.remote_schema, fk.remote_table, fk.remote_column
+      FROM foreign_keys fk
+         JOIN tables tl
+            USING (schema, table_name)
+         JOIN tables tf
+            ON fk.remote_schema = tf.schema AND fk.remote_table = tf.table_name
+      WHERE (only_schemas IS NULL
+         OR fk.schema =ANY (only_schemas)
+            AND fk.remote_schema =ANY (only_schemas))
+        AND tl.migrate
+        AND tf.migrate
+        AND fk.migrate
+      ORDER BY fk.schema, fk.table_name, fk.constraint_name, fk.position
+   LOOP
+      IF old_s <> loc_s OR old_t <> loc_t OR old_c <> cons_name THEN
+         IF old_t <> '' THEN
+            BEGIN
+               EXECUTE stmt || stmt_middle || stmt_suffix;
+            EXCEPTION
+               WHEN others THEN
+                  /* turn the error into a warning */
+                  GET STACKED DIAGNOSTICS
+                     errmsg := MESSAGE_TEXT,
+                     detail := PG_EXCEPTION_DETAIL;
+                  RAISE WARNING 'Error creating foreign key constraint on table %.%', old_s, old_t
+                     USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+                  INSERT INTO migrate_log
+                     (operation, schema_name, object_name, failed_sql, error_message)
+                  VALUES ('foreign key constraint', old_s, old_t,
+                          stmt || stmt_middle || stmt_suffix,
+                          errmsg || coalesce(': ' || detail, '')
+                         );
+
+                  rc := rc + 1;
+            END;
+         END IF;
+
+         stmt := format('ALTER TABLE %I.%I ADD FOREIGN KEY (', loc_s, loc_t);
+         stmt_middle := format(') REFERENCES %I.%I (', rem_s, rem_t);
+         stmt_suffix := format(')%s DEFERRABLE INITIALLY %s',
+                              CASE WHEN candefer THEN '' ELSE ' NOT' END,
+                              CASE WHEN is_deferred THEN 'DEFERRED' ELSE 'IMMEDIATE' END);
+         old_s := loc_s;
+         old_t := loc_t;
+         old_c := cons_name;
+         separator := '';
+      END IF;
+
+      stmt := stmt || separator || format('%I', colname);
+      stmt_middle := stmt_middle || separator || format('%I', rem_colname);
+      separator := ', ';
+   END LOOP;
+
+   IF old_t <> '' THEN
+      BEGIN
+         EXECUTE stmt || stmt_middle || stmt_suffix;
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating foreign key constraint on table %.%', old_s, old_t
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('foreign key constraint', old_s, old_t,
+                    stmt || stmt_middle || stmt_suffix,
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END IF;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating CHECK constraints ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all check constraints except NOT NULL checks */
+   FOR loc_s, loc_t, cons_name, candefer, is_deferred, expr IN
+      SELECT schema, table_name, c.constraint_name, c."deferrable", c.deferred, c.condition
+      FROM checks c
+         JOIN tables t
+            USING (schema, table_name)
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND t.migrate
+        AND c.migrate
+   LOOP
+      BEGIN
+         EXECUTE format('ALTER TABLE %I.%I ADD CHECK(%s)', loc_s, loc_t, expr);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error creating CHECK constraint on table %.% with expression "%"', loc_s, loc_t, expr
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('check constraint', loc_s, loc_t,
+                    format('ALTER TABLE %I.%I ADD CHECK(%s)', loc_s, loc_t, expr),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Creating indexes ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all index columns */
+   old_s := '';
+   old_t := '';
+   old_c := '';
+   FOR loc_s, loc_t, ind_name, uniq, colpos, des, is_expr, expr IN
+      SELECT schema, table_name, i.index_name, i.uniqueness, i.position, i.descend, i.is_expression, i.column_name
+      FROM index_columns i
+         JOIN tables t
+            USING (schema, table_name)
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND t.migrate
+      ORDER BY schema, table_name, i.index_name, i.position
+   LOOP
+      IF old_s <> loc_s OR old_t <> loc_t OR old_c <> ind_name THEN
+         IF old_t <> '' THEN
+            BEGIN
+               EXECUTE stmt || ')';
+            EXCEPTION
+               WHEN others THEN
+                  /* turn the error into a warning */
+                  GET STACKED DIAGNOSTICS
+                     errmsg := MESSAGE_TEXT,
+                     detail := PG_EXCEPTION_DETAIL;
+                  RAISE WARNING 'Error executing "%"', stmt || ')'
+                     USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+                  INSERT INTO migrate_log
+                     (operation, schema_name, object_name, failed_sql, error_message)
+                  VALUES ('create index', old_s, old_t,
+                          stmt || ')',
+                          errmsg || coalesce(': ' || detail, '')
+                         );
+
+                  rc := rc + 1;
+            END;
+         END IF;
+
+         stmt := format('CREATE %sINDEX ON %I.%I (',
+                        CASE WHEN uniq THEN 'UNIQUE ' ELSE '' END, loc_s, loc_t);
+         old_s := loc_s;
+         old_t := loc_t;
+         old_c := ind_name;
+         separator := '';
+      END IF;
+
+      /* fold expressions to lower case */
+      stmt := stmt || separator || expr
+                   || CASE WHEN des THEN ' DESC' ELSE ' ASC' END;
+      separator := ', ';
+   END LOOP;
+
+   IF old_t <> '' THEN
+      BEGIN
+         EXECUTE stmt || ')';
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error executing "%"', stmt || ')'
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create index', old_s, old_t,
+                    stmt || ')',
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END IF;
+
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+   RAISE NOTICE 'Setting column default values ...';
+   SET LOCAL client_min_messages = warning;
+
+   /* loop through all default expressions */
+   FOR loc_s, loc_t, colname, expr IN
+      SELECT schema, table_name, c.column_name, c.default_value
+      FROM columns c
+         JOIN tables t
+            USING (schema, table_name)
+      WHERE (only_schemas IS NULL
+         OR schema =ANY (only_schemas))
+        AND t.migrate
+        AND c.default_value IS NOT NULL
+   LOOP
+      BEGIN
+         EXECUTE format('ALTER TABLE %I.%I ALTER %I SET DEFAULT %s',
+                        loc_s, loc_t, colname, expr);
+      EXCEPTION
+         WHEN others THEN
+            /* turn the error into a warning */
+            GET STACKED DIAGNOSTICS
+               errmsg := MESSAGE_TEXT,
+               detail := PG_EXCEPTION_DETAIL;
+            RAISE WARNING 'Error setting default value on % of table %.% to "%"',
+                          colname, loc_s, loc_t, expr
+               USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('column default', loc_s, loc_t,
+                    format('ALTER TABLE %I.%I ALTER %I SET DEFAULT %s',
+                           loc_s, loc_t, colname, expr),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
+            rc := rc + 1;
+      END;
+   END LOOP;
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN rc;
 END;$$;
 
 DROP FUNCTION oracle_migrate(name, name, name, name[], integer);

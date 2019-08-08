@@ -556,6 +556,16 @@ $$DECLARE
    errmsg text;
    detail text;
 BEGIN
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
    BEGIN
       /* rename the foreign table */
       ft := t || E'\x07';
@@ -581,6 +591,14 @@ BEGIN
             detail := PG_EXCEPTION_DETAIL;
          RAISE WARNING 'Error loading table data for %.%', s, t
             USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+         /* we assume that the table was created by the calling function */
+         INSERT INTO migrate_log
+            (operation, schema_name, object_name, failed_sql, error_message)
+         VALUES ('copy table data', s, t,
+                 format('INSERT INTO %I.%I SELECT * FROM %I.%I', s, t, s, ft),
+                 errmsg || coalesce(': ' || detail, '')
+                );
    END;
 
    RETURN FALSE;
@@ -1284,6 +1302,16 @@ BEGIN
    RAISE NOTICE 'Creating schemas ...';
    SET LOCAL client_min_messages = warning;
 
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
    /* loop through the schemas that should be migrated */
    FOR s IN
       SELECT schema FROM schemas
@@ -1301,6 +1329,13 @@ BEGIN
                detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating schema "%"', s
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create schema', s, '',
+                    format('CREATE SCHEMA %I', s),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;
@@ -1329,6 +1364,15 @@ BEGIN
                detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating sequence %.%', sch, seq
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create sequence', sch, seq,
+                    format('CREATE SEQUENCE %I.%I INCREMENT %s MINVALUE %s MAXVALUE %s START %s CACHE %s %sCYCLE',
+                           sch, seq, incr, minv, maxv, lastval + 1, cachesiz,
+                           CASE WHEN cycl THEN '' ELSE 'NO ' END),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;
@@ -1375,6 +1419,15 @@ BEGIN
                   RAISE WARNING 'Error creating foreign table %.%', sch, tab
                      USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
+                  INSERT INTO migrate_log
+                     (operation, schema_name, object_name, failed_sql, error_message)
+                  VALUES ('create foreign table', sch, tab,
+                          stmt || format(E') SERVER %I\n'
+                                          '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'', max_long ''%s'')',
+                                         server, o_fsch, o_ftab, max_long),
+                          errmsg || coalesce(': ' || detail, '')
+                         );
+
                   rc := rc + 1;
             END;
          END IF;
@@ -1407,6 +1460,15 @@ BEGIN
                detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating foreign table %.%', sch, tab
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+               INSERT INTO migrate_log
+                  (operation, schema_name, object_name, failed_sql, error_message)
+               VALUES ('create foreign table', sch, tab,
+                       stmt || format(E') SERVER %I\n'
+                                       '   OPTIONS (schema ''%s'', table ''%s'', readonly ''true'', max_long ''%s'')',
+                                      server, o_fsch, o_ftab, max_long),
+                       errmsg || coalesce(': ' || detail, '')
+                      );
 
             rc := rc + 1;
       END;
@@ -1503,6 +1565,16 @@ BEGIN
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
 
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
    /* translate schema names to lower case */
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
    FOR sch, fname, src IN
@@ -1525,6 +1597,13 @@ BEGIN
                detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating function %.%', sch, fname
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create function', sch, fname,
+                    'CREATE ' || src,
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;
@@ -1571,6 +1650,16 @@ BEGIN
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
 
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
    /* translate schema names to lower case */
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
    FOR sch, tabname, trigname, bef, event, eachrow, whencl, ref, src IN
@@ -1602,6 +1691,22 @@ BEGIN
                detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating trigger % on %.%', trigname, sch, tabname
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create trigger', sch, tabname,
+                    format(E'CREATE FUNCTION %I.%I() RETURNS trigger LANGUAGE plpgsql AS\n$_f_$%s$_f_$',
+                           sch, trigname, src) || E';\n' ||
+                    format(E'CREATE TRIGGER %I %s %s ON %I.%I FOR EACH %s\n'
+                           '   EXECUTE PROCEDURE %I.%I()',
+                           trigname,
+                           CASE WHEN bef THEN 'BEFORE' ELSE 'AFTER' END,
+                           event,
+                           sch, tabname,
+                           CASE WHEN eachrow THEN 'ROW' ELSE 'STATEMENT' END,
+                           sch, trigname),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;
@@ -1645,6 +1750,16 @@ BEGIN
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
 
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
    /* translate schema names to lower case */
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
    FOR sch, vname, src IN
@@ -1683,6 +1798,13 @@ BEGIN
                detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating view %.%', sch, vname
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create view', sch, vname,
+                    stmt,
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;
@@ -1751,6 +1873,16 @@ BEGIN
    RAISE NOTICE 'Creating UNIQUE and PRIMARY KEY constraints ...';
    SET LOCAL client_min_messages = warning;
 
+   /* create temporary logging table */
+   CREATE TEMPORARY TABLE IF NOT EXISTS migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
    /* loop through all key constraint columns */
    old_s := '';
    old_t := '';
@@ -1779,6 +1911,13 @@ BEGIN
                      detail := PG_EXCEPTION_DETAIL;
                   RAISE WARNING 'Error creating primary key or unique constraint on table %.%', old_s, old_t
                      USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+                  INSERT INTO migrate_log
+                     (operation, schema_name, object_name, failed_sql, error_message)
+                  VALUES ('unique constraint', old_s, old_t,
+                          stmt || stmt_suffix,
+                          errmsg || coalesce(': ' || detail, '')
+                         );
 
                   rc := rc + 1;
             END;
@@ -1811,6 +1950,13 @@ BEGIN
             RAISE WARNING 'Error creating primary key or unique constraint on table %.%',
                           old_s, old_t
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('unique constraint', old_s, old_t,
+                    stmt || stmt_suffix,
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;
@@ -1854,6 +2000,13 @@ BEGIN
                   RAISE WARNING 'Error creating foreign key constraint on table %.%', old_s, old_t
                      USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
+                  INSERT INTO migrate_log
+                     (operation, schema_name, object_name, failed_sql, error_message)
+                  VALUES ('foreign key constraint', old_s, old_t,
+                          stmt || stmt_middle || stmt_suffix,
+                          errmsg || coalesce(': ' || detail, '')
+                         );
+
                   rc := rc + 1;
             END;
          END IF;
@@ -1886,6 +2039,13 @@ BEGIN
             RAISE WARNING 'Error creating foreign key constraint on table %.%', old_s, old_t
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('foreign key constraint', old_s, old_t,
+                    stmt || stmt_middle || stmt_suffix,
+                    errmsg || coalesce(': ' || detail, '')
+                   );
+
             rc := rc + 1;
       END;
    END IF;
@@ -1915,6 +2075,13 @@ BEGIN
                detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error creating CHECK constraint on table %.% with expression "%"', loc_s, loc_t, expr
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('check constraint', loc_s, loc_t,
+                    format('ALTER TABLE %I.%I ADD CHECK(%s)', loc_s, loc_t, expr),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;
@@ -1951,6 +2118,13 @@ BEGIN
                   RAISE WARNING 'Error executing "%"', stmt || ')'
                      USING DETAIL = errmsg || coalesce(': ' || detail, '');
 
+                  INSERT INTO migrate_log
+                     (operation, schema_name, object_name, failed_sql, error_message)
+                  VALUES ('create index', old_s, old_t,
+                          stmt || ')',
+                          errmsg || coalesce(': ' || detail, '')
+                         );
+
                   rc := rc + 1;
             END;
          END IF;
@@ -1980,6 +2154,13 @@ BEGIN
                detail := PG_EXCEPTION_DETAIL;
             RAISE WARNING 'Error executing "%"', stmt || ')'
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('create index', old_s, old_t,
+                    stmt || ')',
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;
@@ -2012,6 +2193,14 @@ BEGIN
             RAISE WARNING 'Error setting default value on % of table %.% to "%"',
                           colname, loc_s, loc_t, expr
                USING DETAIL = errmsg || coalesce(': ' || detail, '');
+
+            INSERT INTO migrate_log
+               (operation, schema_name, object_name, failed_sql, error_message)
+            VALUES ('column default', loc_s, loc_t,
+                    format('ALTER TABLE %I.%I ALTER %I SET DEFAULT %s',
+                           loc_s, loc_t, colname, expr),
+                    errmsg || coalesce(': ' || detail, '')
+                   );
 
             rc := rc + 1;
       END;

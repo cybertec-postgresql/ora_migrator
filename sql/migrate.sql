@@ -17,7 +17,7 @@ CREATE ROLE migrator LOGIN;
 
 /* create all requisite extensions */
 CREATE EXTENSION oracle_fdw;
-CREATE EXTENSION ora_migrator VERSION;
+CREATE EXTENSION ora_migrator;
 
 /* create a foreign server and a user mapping */
 CREATE SERVER oracle FOREIGN DATA WRAPPER oracle_fdw
@@ -99,3 +99,8 @@ SELECT oracle_migrate_views(
 );
 
 SELECT oracle_migrate_finish();
+
+/* we have to check the temporary log table in the same session */
+SELECT operation, schema_name, object_name, failed_sql, error_message
+FROM migrate_log
+ORDER BY log_time;

@@ -31,11 +31,11 @@ primary key, btree, for table "testschema1.log"
 --------+-------+---------+---------------------+-----------+---------+-------
  bigint |     2 |       1 | 9223372036854775807 |         5 | no      |    10
 
-                                    Table "testschema1.tab1"
- Column |              Type              | Collation | Nullable |            Default            
---------+--------------------------------+-----------+----------+-------------------------------
+                                     Table "testschema1.tab1"
+ Column |              Type              | Collation | Nullable |             Default             
+--------+--------------------------------+-----------+----------+---------------------------------
  id     | integer                        |           | not null | 
- vc     | character varying(30)          |           |          | ('AT '::text || CURRENT_DATE)
+ vc     | character varying(30)          |           |          | (('AT '::text || CURRENT_DATE))
  n      | bigint                         |           | not null | 
  bf     | real                           |           |          | 
  bd     | double precision               |           |          | 
@@ -50,7 +50,7 @@ Check constraints:
 Referenced by:
     TABLE "testschema1.tab2" CONSTRAINT "tab2_tab1_id_fkey" FOREIGN KEY (tab1_id) REFERENCES testschema1.tab1(id)
 Triggers:
-    tab1_trig BEFORE INSERT OR UPDATE ON testschema1.tab1 FOR EACH ROW EXECUTE PROCEDURE testschema1.tab1_trig()
+    tab1_trig BEFORE INSERT OR UPDATE ON testschema1.tab1 FOR EACH ROW EXECUTE FUNCTION testschema1.tab1_trig()
 
       Index "testschema1.tab1_bf_bd_idx"
  Column |       Type       | Key? | Definition 

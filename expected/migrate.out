@@ -117,3 +117,11 @@ SELECT oracle_migrate_finish();
                      0
 (1 row)
 
+/* we have to check the temporary log table in the same session */
+SELECT operation, schema_name, object_name, failed_sql, error_message
+FROM migrate_log
+ORDER BY log_time;
+ operation | schema_name | object_name | failed_sql | error_message 
+-----------+-------------+-------------+------------+---------------
+(0 rows)
+
