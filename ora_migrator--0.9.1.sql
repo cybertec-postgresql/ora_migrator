@@ -14,10 +14,10 @@ $$DECLARE
 
    sys_schemas text :=
       E'''''ANONYMOUS'''', ''''APEX_PUBLIC_USER'''', ''''APEX_030200'''', ''''APEX_040000'''', ''''APPQOSSYS'''',\n'
-      '         ''''AURORA$JIS$UTILITY$'''', ''''AURORA$ORB$UNAUTHENTICATED'''',\n'
-      '         ''''CTXSYS'''', ''''DBSNMP'''', ''''DIP'''', ''''DMSYS'''', ''''EXFSYS'''', ''''FLOWS_FILES'''',\n'
-      '         ''''LBACSYS'''', ''''MDDATA'''', ''''MDSYS'''', ''''MGMT_VIEW'''',\n'
-      '         ''''ODM'''', ''''ODM_MTR'''', ''''OLAPSYS'''', ''''ORACLE_OCM'''', ''''ORDDATA'''',\n'
+      '         ''''AUDSYS'''', ''''AURORA$JIS$UTILITY$'''', ''''AURORA$ORB$UNAUTHENTICATED'''',\n'
+      '         ''''CTXSYS'''', ''''DBSNMP'''', ''''DIP'''', ''''DMSYS'''', ''''DVSYS'''', ''''EXFSYS'''', ''''FLOWS_FILES'''',\n'
+      '         ''''GSMADMIN_INTERNAL'''', ''''LBACSYS'''', ''''MDDATA'''', ''''MDSYS'''', ''''MGMT_VIEW'''',\n'
+      '         ''''ODM'''', ''''ODM_MTR'''', ''''OJVMSYS'''', ''''OLAPSYS'''', ''''ORACLE_OCM'''', ''''ORDDATA'''',\n'
       '         ''''ORDPLUGINS'''', ''''ORDSYS'''', ''''OSE$HTTP$ADMIN'''', ''''OUTLN'''',\n'
       '         ''''SI_INFORMTN_SCHEMA'''', ''''SPATIAL_CSW_ADMIN_USR'''',\n'
       '         ''''SPATIAL_WFS_ADMIN_USR'''', ''''SYS'''', ''''SYSMAN'''', ''''SYSTEM'''', ''''TRACESRV'''',\n'
@@ -427,6 +427,20 @@ $$DECLARE
          '  AND grantee NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
+   segments_sql text := E'CREATE FOREIGN TABLE %I.segments (\n'
+      '   schema       varchar(128) NOT NULL,\n'
+      '   segment_name varchar(128) NOT NULL,\n'
+      '   segment_type varchar(18)  NOT NULL,\n'
+      '   bytes        bigint       NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       segment_name,\n'
+         '       segment_type,\n'
+         '       bytes\n'
+         'FROM dba_segments\n'
+         'WHERE owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
 BEGIN
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
@@ -500,6 +514,10 @@ BEGIN
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.column_privs', schema);
    EXECUTE format(column_privs_sql, schema, server, max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.column_privs IS ''Privileges on Oracle table columns on foreign server "%I"''', schema, server);
+   /* segments */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.segments', schema);
+   EXECUTE format(segments_sql, schema, server, max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.segments IS ''Size of Oracle objects on foreign server "%I"''', schema, server);
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;

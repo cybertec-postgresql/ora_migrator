@@ -451,6 +451,7 @@ Other functions
   - `packages`: definition and bodies of PL/SQL packages
   - `table_privs`: privileges of users on tables
   - `column_privs`: privileges of users on table columns
+  - `segments`: size of Oracle objects
 
   Objects in Oracle system schemas will not be shown.
 
