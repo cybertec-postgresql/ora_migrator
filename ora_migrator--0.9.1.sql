@@ -2515,3 +2515,48 @@ END;$$;
 
 COMMENT ON FUNCTION oracle_migrate(name, name, name, name[], integer, boolean) IS
    'migrate an Oracle database from a foreign server to PostgreSQL';
+
+CREATE FUNCTION oracle_code_count(
+   pgstage_schema name DEFAULT NAME 'pgsql_stage'
+) RETURNS TABLE (
+   object_type text,
+   number bigint,
+   lines bigint,
+   bytes bigint
+) LANGUAGE plpgsql SET search_path = pg_catalog AS
+$$BEGIN
+   RETURN QUERY EXECUTE
+      format(
+         E'SELECT ''function'' AS object_type,\n'
+         '       count(*) AS number,\n'
+         '       coalesce(sum((SELECT count(*) FROM regexp_matches(oracle_source, E''\\n'', ''g'')))::bigint, 0) AS lines,\n'
+         '       coalesce(sum(octet_length(oracle_source)), 0) AS bytes\n'
+         'FROM %I.functions\n'
+         'UNION ALL\n'
+         'SELECT ''trigger'' AS object_type,\n'
+         '       count(*) AS number,\n'
+         '       coalesce(sum((SELECT count(*) + 1 FROM regexp_matches(oracle_source, E''\\n'', ''g'')))::bigint, 0) AS lines,\n'
+         '       coalesce(sum(octet_length(oracle_source)), 0) AS bytes\n'
+         'FROM %I.triggers\n'
+         'UNION ALL\n'
+         'SELECT ''package'' AS object_type,\n'
+         '       count(*) AS number,\n'
+         '       coalesce(sum((SELECT count(*) FROM regexp_matches(source, E''\\n'', ''g'')))::bigint, 0) AS lines,\n'
+         '       coalesce(sum(octet_length(source)), 0) AS bytes\n'
+         'FROM %I.packages\n'
+         'WHERE is_body\n'
+         'UNION ALL\n'
+         'SELECT ''view'' AS object_type,\n'
+         '       count(*) AS number,\n'
+         '       coalesce(sum((SELECT count(*) + 1 FROM regexp_matches(oracle_def, E''\\n'', ''g'')))::bigint, 0) AS lines,\n'
+         '       coalesce(sum(octet_length(oracle_def)), 0) AS bytes\n'
+         'FROM %I.views',
+         pgstage_schema,
+         pgstage_schema,
+         pgstage_schema,
+         pgstage_schema
+      );
+END;$$;
+
+COMMENT ON FUNCTION oracle_code_count(name) IS
+   'provide statistics on the PL/SQL code and views in the Oracle database';

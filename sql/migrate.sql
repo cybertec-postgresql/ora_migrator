@@ -43,6 +43,8 @@ SELECT oracle_migrate_prepare(
    max_long => 1024
 );
 
+SELECT * FROM oracle_code_count();
+
 /* edit some values in the staging schema */
 UPDATE pgsql_stage.triggers
    SET trigger_body = replace(

@@ -149,6 +149,9 @@ optional `SCHEMA` clause of `CREATE EXTENSION`).
 Objects created by the extension
 ================================
 
+Migration functions
+-------------------
+
 - Function `oracle_migrate`:
 
   Performs a migration from an Oracle foreign server to PostgreSQL.  
@@ -384,10 +387,33 @@ Objects created by the extension
   The return value is the number of captured errors that have been turned
   into warnings.
 
+Other functions
+---------------
+
+- Function `oracle_code_count`:
+
+  This table function provides statistics on the number and size of
+  functions, triggers, packages and view definitions in the Oracle database.
+
+  This can be used to assess the complexity of a database migration, since
+  migrating these objects usually requires manual intervention.
+
+  There is one optional parameter:
+
+  - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL
+    staging schema created by `oracle_migrate_pgschema`.
+
+  The function returns one line per object type (`function`, `trigger`,
+  `package` and `view`) that contains the number of objects in the
+  Oracle database, the total lines of code and the total number of bytes
+  in the object definitions.
+
 - Function `create_oraviews`:
 
   This function creates a number of foreign tables and views for
-  Oracle metadata.  
+  Oracle metadata.  It is used internally by `oracle_migrate_prepare`,
+  but can be used independently.
+
   It takes the following parameters:
 
   - `server`: The name of the Oracle foreign server for which the

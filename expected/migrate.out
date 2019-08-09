@@ -36,6 +36,15 @@ SELECT oracle_migrate_prepare(
                       0
 (1 row)
 
+SELECT * FROM oracle_code_count();
+ object_type | number | lines | bytes 
+-------------+--------+-------+-------
+ function    |      1 |     3 |    68
+ trigger     |      1 |     4 |   120
+ package     |      0 |     0 |     0
+ view        |      1 |     2 |    76
+(4 rows)
+
 /* edit some values in the staging schema */
 UPDATE pgsql_stage.triggers
    SET trigger_body = replace(
