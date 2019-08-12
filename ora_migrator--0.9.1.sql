@@ -575,20 +575,6 @@ $$DECLARE
    errmsg text;
    detail text;
 BEGIN
-   /* create logging table */
-   EXECUTE
-      format(
-         E'CREATE TABLE IF NOT EXISTS %I.migrate_log (\n'
-         '   log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),\n'
-         '   operation text NOT NULL,\n'
-         '   schema_name name NOT NULL,\n'
-         '   object_name name NOT NULL,\n'
-         '   failed_sql text,\n'
-         '   error_message text NOT NULL\n'
-         ');',
-         pgstage_schema
-      );
-
    BEGIN
       /* rename the foreign table */
       ft := t || E'\x07';
@@ -1268,6 +1254,15 @@ BEGIN
          PRIMARY KEY (schema, table_name, column_name, grantee, privilege)
    );
 
+   CREATE TABLE migrate_log (
+      log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
+      operation text NOT NULL,
+      schema_name name NOT NULL,
+      object_name name NOT NULL,
+      failed_sql text,
+      error_message text NOT NULL
+   );
+
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
 
@@ -1334,20 +1329,6 @@ BEGIN
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
    RAISE NOTICE 'Creating schemas ...';
    SET LOCAL client_min_messages = warning;
-
-   /* create logging table */
-   EXECUTE
-      format(
-         E'CREATE TABLE IF NOT EXISTS %I.migrate_log (\n'
-         '   log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),\n'
-         '   operation text NOT NULL,\n'
-         '   schema_name name NOT NULL,\n'
-         '   object_name name NOT NULL,\n'
-         '   failed_sql text,\n'
-         '   error_message text NOT NULL\n'
-         ');',
-         pgstage_schema
-      );
 
    /* loop through the schemas that should be migrated */
    FOR s IN
@@ -1645,20 +1626,6 @@ BEGIN
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
 
-   /* create logging table */
-   EXECUTE
-      format(
-         E'CREATE TABLE IF NOT EXISTS %I.migrate_log (\n'
-         '   log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),\n'
-         '   operation text NOT NULL,\n'
-         '   schema_name name NOT NULL,\n'
-         '   object_name name NOT NULL,\n'
-         '   failed_sql text,\n'
-         '   error_message text NOT NULL\n'
-         ');',
-         pgstage_schema
-      );
-
    /* translate schema names to lower case */
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
    FOR sch, fname, src IN
@@ -1744,20 +1711,6 @@ BEGIN
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
-
-   /* create logging table */
-   EXECUTE
-      format(
-         E'CREATE TABLE IF NOT EXISTS %I.migrate_log (\n'
-         '   log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),\n'
-         '   operation text NOT NULL,\n'
-         '   schema_name name NOT NULL,\n'
-         '   object_name name NOT NULL,\n'
-         '   failed_sql text,\n'
-         '   error_message text NOT NULL\n'
-         ');',
-         pgstage_schema
-      );
 
    /* translate schema names to lower case */
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
@@ -1859,20 +1812,6 @@ BEGIN
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
    EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
-
-   /* create logging table */
-   EXECUTE
-      format(
-         E'CREATE TABLE IF NOT EXISTS %I.migrate_log (\n'
-         '   log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),\n'
-         '   operation text NOT NULL,\n'
-         '   schema_name name NOT NULL,\n'
-         '   object_name name NOT NULL,\n'
-         '   failed_sql text,\n'
-         '   error_message text NOT NULL\n'
-         ');',
-         pgstage_schema
-      );
 
    /* translate schema names to lower case */
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
@@ -1997,20 +1936,6 @@ BEGIN
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
    RAISE NOTICE 'Creating UNIQUE and PRIMARY KEY constraints ...';
    SET LOCAL client_min_messages = warning;
-
-   /* create logging table */
-   EXECUTE
-      format(
-         E'CREATE TABLE IF NOT EXISTS %I.migrate_log (\n'
-         '   log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),\n'
-         '   operation text NOT NULL,\n'
-         '   schema_name name NOT NULL,\n'
-         '   object_name name NOT NULL,\n'
-         '   failed_sql text,\n'
-         '   error_message text NOT NULL\n'
-         ');',
-         pgstage_schema
-      );
 
    /* loop through all key constraint columns */
    old_s := '';
