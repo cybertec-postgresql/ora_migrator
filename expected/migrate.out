@@ -69,6 +69,16 @@ UPDATE pgsql_stage.functions
    WHERE schema = 'testschema1'
      AND function_name = 'tomorrow';
 UPDATE pgsql_stage.triggers SET migrate = TRUE;
+/* test "baddata" for problems */
+SELECT message
+FROM oracle_test_table('oracle', 'testschema1', 'baddata')
+ORDER BY message;
+                     message                     
+-------------------------------------------------
+ invalid byte in "VALUE2" 
+ zero byte in "VALUE1" invalid byte in "VALUE2" 
+(2 rows)
+
 /* perform the migration */
 SELECT oracle_migrate_mkforeign(
    server => 'oracle', 
@@ -93,9 +103,11 @@ DETAIL:  invalid byte sequence for encoding "UTF8": 0x00:
 SELECT oracle_migrate_constraints(
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
 );
+WARNING:  Error creating primary key or unique constraint on table testschema1.baddata
+DETAIL:  relation "testschema1.baddata" does not exist: 
  oracle_migrate_constraints 
 ----------------------------
-                          0
+                          1
 (1 row)
 
 SELECT oracle_migrate_functions(
@@ -126,10 +138,11 @@ SELECT oracle_migrate_views(
 SELECT operation, schema_name, object_name, failed_sql, error_message
 FROM pgsql_stage.migrate_log
 ORDER BY log_time;
-    operation    | schema_name | object_name |                               failed_sql                                |                   error_message                   
------------------+-------------+-------------+-------------------------------------------------------------------------+---------------------------------------------------
- copy table data | testschema1 | baddata     | INSERT INTO testschema1.baddata SELECT * FROM testschema1."baddata\x07" | invalid byte sequence for encoding "UTF8": 0x00: 
-(1 row)
+     operation     | schema_name | object_name |                                       failed_sql                                        |                   error_message                   
+-------------------+-------------+-------------+-----------------------------------------------------------------------------------------+---------------------------------------------------
+ copy table data   | testschema1 | baddata     | INSERT INTO testschema1.baddata SELECT * FROM testschema1."baddata\x07"                 | invalid byte sequence for encoding "UTF8": 0x00: 
+ unique constraint | testschema1 | baddata     | ALTER TABLE testschema1.baddata ADD PRIMARY KEY (id) NOT DEFERRABLE INITIALLY IMMEDIATE | relation "testschema1.baddata" does not exist: 
+(2 rows)
 
 SELECT oracle_migrate_finish();
  oracle_migrate_finish 

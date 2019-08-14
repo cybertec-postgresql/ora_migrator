@@ -73,6 +73,11 @@ UPDATE pgsql_stage.functions
 
 UPDATE pgsql_stage.triggers SET migrate = TRUE;
 
+/* test "baddata" for problems */
+SELECT message
+FROM oracle_test_table('oracle', 'testschema1', 'baddata')
+ORDER BY message;
+
 /* perform the migration */
 SELECT oracle_migrate_mkforeign(
    server => 'oracle', 

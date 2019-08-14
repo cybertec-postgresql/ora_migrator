@@ -111,11 +111,17 @@ CREATE VIEW view1 AS
 
 /* this will fail because there is a zero byte in the data */
 CREATE TABLE baddata (
-   value  VARCHAR2(20 CHAR)
+   id     NUMBER(5) CONSTRAINT baddata_pkey PRIMARY KEY,
+   value1 VARCHAR2(20 CHAR),
+   value2 VARCHAR2(20 CHAR)
 ) SEGMENT CREATION IMMEDIATE;
 
-INSERT INTO baddata (value)
-   VALUES ('contains' || chr(0) || 'zero');
+INSERT INTO baddata (id, value1, value2)
+   VALUES (1, 'contains' || chr(0) || 'zero', convert('schön korrupt', 'WE8ISO8859P1'));
+INSERT INTO baddata (id, value1, value2)
+   VALUES (2, NULL, NULL);
+INSERT INTO baddata (id, value1, value2)
+   VALUES (3, NULL, convert('böse', 'WE8ISO8859P1'));
 
 COMMIT;
 

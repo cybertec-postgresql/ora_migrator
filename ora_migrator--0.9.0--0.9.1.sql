@@ -2442,3 +2442,99 @@ END;$$;
 
 COMMENT ON FUNCTION oracle_code_count(name) IS
    'provide statistics on the PL/SQL code and views in the Oracle database';
+
+CREATE FUNCTION oracle_test_table(
+   server         name,
+   schema         name,
+   table_name     name,
+   pgstage_schema name DEFAULT NAME 'pgsql_stage'
+) RETURNS TABLE (
+   rowid          text,
+   message        text
+) LANGUAGE plpgsql VOLATILE STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   v_schema     text;
+   v_table      text;
+   v_column     text;
+   v_where      text[] := ARRAY[]::text[];
+   v_select     text[] := ARRAY[]::text[];
+   old_msglevel text;
+BEGIN
+   /* remember old setting */
+   old_msglevel := current_setting('client_min_messages');
+   /* make the output less verbose */
+   SET LOCAL client_min_messages = warning;
+
+   EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
+
+   FOR v_schema, v_table, v_column IN
+      SELECT t.oracle_schema AS schema,
+             t.oracle_name AS table_name,
+             c.oracle_name AS column_name
+      FROM tables AS t
+         JOIN columns AS c USING (schema, table_name)
+      WHERE t.schema = $2
+        AND t.table_name = $3
+        AND c.oracle_type IN ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'VARCHAR', 'CLOB')
+      ORDER BY c.position
+   LOOP
+      v_select := v_select
+         || format(
+               E'CASE WHEN %I LIKE ''''%%'''' || chr(0) || ''''%%'''' THEN ''''zero byte in %I '''' END',
+               v_column,
+               v_column
+            )
+         || format(
+               E'CASE WHEN convert(convert(%I, ''''AL16UTF16''''), ''''AL32UTF8'''', ''''AL16UTF16'''') <> %I THEN ''''invalid byte in %I '''' END',
+               v_column,
+               v_column,
+               v_column
+            );
+
+      v_where := v_where
+         || format(
+               E'(%I LIKE ''''%%'''' || chr(0) || ''''%%'''')\\n''\n'
+               '         ''   OR (convert(convert(%I, ''''AL16UTF16''''), ''''AL32UTF8'''', ''''AL16UTF16'''') <> %I)',
+               v_column,
+               v_column,
+               v_column
+            );
+   END LOOP;
+
+   /* report an error if the table does not exist */
+   IF cardinality(v_where) = 0 THEN
+      RAISE EXCEPTION '%',
+         format('table %I.%I not found in %I.tables',
+                $2,
+                $3,
+                $4
+         );
+   END IF;
+
+   DROP FOREIGN TABLE IF EXISTS pg_temp.oracle_errors;
+
+   EXECUTE
+      format(
+         E'CREATE FOREIGN TABLE pg_temp.oracle_errors (\n'
+         '   rowid   text NOT NULL,\n'
+         '   message text NOT NULL\n'
+         ') SERVER %I OPTIONS (\n'
+         '   table E''(SELECT CAST(rowid AS varchar2(100)) AS row_id,\\n''\n'
+         '         ''       %s AS message\\n''\n'
+         '         ''FROM %I.%I\\n''\n'
+         '         ''WHERE %s)'')',
+         server,
+         array_to_string(v_select, E'\\n''\n         ''       || '),
+         v_schema,
+         v_table,
+         array_to_string(v_where, E'\\n''\n         ''   OR ')
+      );
+
+   /* reset client_min_messages */
+   EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
+
+   RETURN QUERY SELECT * FROM pg_temp.oracle_errors;
+END;$$;
+
+COMMENT ON FUNCTION oracle_test_table(name, name, name, name) IS
+   'test an Oracle table for potential migration problems';

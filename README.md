@@ -408,6 +408,34 @@ Other functions
   Oracle database, the total lines of code and the total number of bytes
   in the object definitions.
 
+- Table function `oracle_test_table`:
+
+  This function tests an Oracle table for potential migration problems.
+  You have to run it after `oracle_migrate_prepare`.
+
+  The parameters are:
+
+  - `server`: the name of the Oracle foreign server
+
+  - `schema`: the schema name
+
+  - `table_name`: the table name
+
+  - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
+    created by `oracle_migrate_prepare`.
+
+  `schema` and `table_name` must be values from the columns of the same name
+  of the `tables` table in the PostgreSQL stage.
+
+  This is a table function and returns the Oracle ROWID of the problematic
+  rows as well as a message describing the problem.
+
+  Currently there are tests for two problems:
+
+  - zero bytes `chr(0)` in string columns
+
+  - values in string columns that are not in the database encoding
+
 - Function `create_oraviews`:
 
   This function creates a number of foreign tables and views for
