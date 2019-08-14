@@ -2485,7 +2485,7 @@ BEGIN
                v_column
             )
          || format(
-               E'CASE WHEN convert(convert(%I, ''''AL16UTF16''''), ''''AL32UTF8'''', ''''AL16UTF16'''') <> %I THEN ''''invalid byte in %I '''' END',
+               E'CASE WHEN convert(convert(%I, ''''AL16UTF16''''), (SELECT value FROM nls_database_parameters WHERE parameter = ''''NLS_CHARACTERSET''''), ''''AL16UTF16'''') <> %I THEN ''''invalid byte in %I '''' END',
                v_column,
                v_column,
                v_column
@@ -2494,7 +2494,7 @@ BEGIN
       v_where := v_where
          || format(
                E'(%I LIKE ''''%%'''' || chr(0) || ''''%%'''')\\n''\n'
-               '         ''   OR (convert(convert(%I, ''''AL16UTF16''''), ''''AL32UTF8'''', ''''AL16UTF16'''') <> %I)',
+               '         ''   OR (convert(convert(%I, ''''AL16UTF16''''), (SELECT value FROM nls_database_parameters WHERE parameter = ''''NLS_CHARACTERSET''''), ''''AL16UTF16'''') <> %I)',
                v_column,
                v_column,
                v_column
