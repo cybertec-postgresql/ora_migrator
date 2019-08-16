@@ -2517,6 +2517,7 @@ $$DECLARE
    v_schema     text;
    v_table      text;
    v_column     text;
+   v_oratype    text;
    v_where      text[] := ARRAY[]::text[];
    v_select     text[] := ARRAY[]::text[];
    old_msglevel text;
@@ -2528,38 +2529,80 @@ BEGIN
 
    EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
 
-   FOR v_schema, v_table, v_column IN
+   /*
+    * The idea is to create a temporary foreign table on an SQL statement
+    * that performs the required checks on the Oracle side.
+    */
+
+   FOR v_schema, v_table, v_column, v_oratype IN
       SELECT t.oracle_schema AS schema,
              t.oracle_name AS table_name,
-             c.oracle_name AS column_name
+             c.oracle_name AS column_name,
+             c.oracle_type
       FROM tables AS t
          JOIN columns AS c USING (schema, table_name)
       WHERE t.schema = $2
         AND t.table_name = $3
-        AND c.oracle_type IN ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'VARCHAR', 'CLOB')
+        /* unfortunately our trick doesn't work for CLOB */
+        AND c.oracle_type IN ('VARCHAR2', 'NVARCHAR2', 'CHAR', 'NCHAR', 'VARCHAR')
       ORDER BY c.position
    LOOP
+      /* test for zero bytes */
       v_select := v_select
          || format(
                E'CASE WHEN %I LIKE ''''%%'''' || chr(0) || ''''%%'''' THEN ''''zero byte in %I '''' END',
-               v_column,
-               v_column
-            )
-         || format(
-               E'CASE WHEN convert(convert(%I, ''''AL16UTF16''''), (SELECT value FROM nls_database_parameters WHERE parameter = ''''NLS_CHARACTERSET''''), ''''AL16UTF16'''') <> %I THEN ''''invalid byte in %I '''' END',
-               v_column,
                v_column,
                v_column
             );
 
       v_where := v_where
          || format(
-               E'(%I LIKE ''''%%'''' || chr(0) || ''''%%'''')\\n''\n'
-               '         ''   OR (convert(convert(%I, ''''AL16UTF16''''), (SELECT value FROM nls_database_parameters WHERE parameter = ''''NLS_CHARACTERSET''''), ''''AL16UTF16'''') <> %I)',
-               v_column,
+               E'(%I LIKE ''''%%'''' || chr(0) || ''''%%'''')',
                v_column,
                v_column
             );
+
+      /*
+       * Test for corrupt string data.
+       * The trick is to convert the string to a different encoding and back.
+       * We have to choose an encoding that
+       * - can store all possible characters
+       * - is different from the original encoding (else nothing is done)
+       * If there are bad bytes, they will be replaced with "replacement characters".
+       */
+      IF v_oratype IN ('NVARCHAR2', 'NCHAR') THEN
+         /* NVARCHAR2 and NCHAR are stored in AS16UTF16 or UTF8 */
+         v_select := v_select
+            || format(
+                  E'CASE WHEN convert(convert(%I, ''''AL32UTF8''''), (SELECT value FROM nls_database_parameters WHERE parameter = ''''NLS_NCHAR_CHARACTERSET''''), ''''AL32UTF8'''') <> %I THEN ''''invalid byte in %I '''' END',
+                  v_column,
+                  v_column,
+                  v_column
+               );
+
+         v_where := v_where
+            || format(
+                  E'(convert(convert(%I, ''''AL32UTF8''''), (SELECT value FROM nls_database_parameters WHERE parameter = ''''NLS_NCHAR_CHARACTERSET''''), ''''AL32UTF8'''') <> %I)',
+                  v_column,
+                  v_column
+               );
+      ELSE
+         /* all other strings are *never* stored in AL16UTF16 */
+         v_select := v_select
+            || format(
+                  E'CASE WHEN convert(convert(%I, ''''AL16UTF16''''), (SELECT value FROM nls_database_parameters WHERE parameter = ''''NLS_CHARACTERSET''''), ''''AL16UTF16'''') <> %I THEN ''''invalid byte in %I '''' END',
+                  v_column,
+                  v_column,
+                  v_column
+               );
+
+         v_where := v_where
+            || format(
+                  E'(convert(convert(%I, ''''AL16UTF16''''), (SELECT value FROM nls_database_parameters WHERE parameter = ''''NLS_CHARACTERSET''''), ''''AL16UTF16'''') <> %I)',
+                  v_column,
+                  v_column
+               );
+      END IF;
    END LOOP;
 
    /* report an error if the table does not exist */
