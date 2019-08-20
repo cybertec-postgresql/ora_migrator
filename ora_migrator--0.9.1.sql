@@ -740,6 +740,7 @@ BEGIN
             IF substr(v_type, 10, 3) = 'DAY' THEN n_type := 'interval(' || least(v_scale, 6) || ')';
             ELSE n_type := 'interval(0)';
             END IF;
+         WHEN v_type = 'XMLTYPE' AND (v_typschema = 'SYS' OR v_typschema = 'PUBLIC') THEN n_type := 'xml';
          WHEN v_type = 'SDO_GEOMETRY' AND v_typschema = 'MDSYS' THEN n_type := geom_type;
          ELSE n_type := 'text';  -- cannot translate
       END CASE;
