@@ -2530,6 +2530,20 @@ BEGIN
 
    EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
 
+   /* check if the table exists */
+   IF NOT EXISTS (
+         SELECT 1 FROM tables
+         WHERE schema = $2 AND table_name = $3
+      )
+   THEN
+      RAISE EXCEPTION '%',
+         format('table %I.%I not found in %I.tables',
+                $2,
+                $3,
+                $4
+         );
+   END IF;
+
    /*
     * The idea is to create a temporary foreign table on an SQL statement
     * that performs the required checks on the Oracle side.
@@ -2606,14 +2620,9 @@ BEGIN
       END IF;
    END LOOP;
 
-   /* report an error if the table does not exist */
+   /* if there is no string column, we are done */
    IF cardinality(v_where) = 0 THEN
-      RAISE EXCEPTION '%',
-         format('table %I.%I not found in %I.tables',
-                $2,
-                $3,
-                $4
-         );
+      RETURN;
    END IF;
 
    DROP FOREIGN TABLE IF EXISTS pg_temp.oracle_errors;
