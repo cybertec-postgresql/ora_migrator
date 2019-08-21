@@ -1113,7 +1113,7 @@ BEGIN
    PERFORM create_oraviews(server, staging_schema, max_long);
 
    /* set "search_path" to the PostgreSQL stage */
-   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+   EXECUTE format('SET LOCAL search_path = %I, %I, %I', pgstage_schema, staging_schema, extschema);
 
    /* create tables in the PostgreSQL stage */
    CREATE TABLE columns(
@@ -1317,6 +1317,32 @@ BEGIN
       errcount   bigint                   NOT NULL,
       PRIMARY KEY (schema, table_name, log_time)
    );
+
+   /* rough estimate of the migration costs */
+   CREATE VIEW oracle_migration_cost_estimate AS
+      SELECT 'tables'::text                 AS task_type,
+             count(*)::bigint               AS task_content,
+             'table'::text                  AS task_unit,
+             ((count(*) + 9) / 10)::integer AS migration_hours
+      FROM tables
+      WHERE migrate
+   UNION ALL
+      SELECT 'data_migration'::text,
+             sum(bytes)::bigint,
+             'bytes'::text,
+             sqrt(sum(bytes::float8) / 1073741824 + 1)::integer
+      FROM segments AS s
+         JOIN tables AS t
+            ON s.schema = t.oracle_schema
+               AND s.segment_name = t.oracle_name
+      WHERE s.segment_type = 'TABLE'
+        AND t.migrate
+   UNION ALL
+      SELECT object_type::text,
+             bytes::bigint,
+             'characters'::text,
+             ((bytes + 3999) / 4000)::integer
+      FROM oracle_code_count() AS q;
 
    /* reset client_min_messages */
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;

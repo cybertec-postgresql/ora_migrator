@@ -220,6 +220,9 @@ Migration functions
     the views in the Oracle stage.  Names and data types will be
     translated wherever possible.
 
+  - Create the view `oracle_migration_cost_estimate` in the PostgreSQL
+    stage that can be used to estimate the total migration costs.
+
   You need permissions to create schemas in the PostgreSQL database
   to use this function.
 
