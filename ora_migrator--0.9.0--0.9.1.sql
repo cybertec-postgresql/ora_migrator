@@ -1289,6 +1289,7 @@ BEGIN
          PRIMARY KEY (schema, table_name, column_name, grantee, privilege)
    );
 
+   /* table to record errors during migration */
    CREATE TABLE migrate_log (
       log_time timestamp with time zone PRIMARY KEY DEFAULT clock_timestamp(),
       operation text NOT NULL,
@@ -1296,6 +1297,25 @@ BEGIN
       object_name name NOT NULL,
       failed_sql text,
       error_message text NOT NULL
+   );
+
+   /* table to record errors from "oracle_migrate_test_data" */
+   CREATE TABLE test_error (
+      log_time   timestamp with time zone NOT NULL DEFAULT current_timestamp,
+      schema     name                     NOT NULL,
+      table_name name                     NOT NULL,
+      rowid      text                     NOT NULL,
+      message    text                     NOT NULL,
+      PRIMARY KEY (schema, table_name, log_time, rowid)
+   );
+
+   /* table for cumulative errors from "oracle_migrate_test_data" */
+   CREATE TABLE test_error_stats (
+      log_time   timestamp with time zone NOT NULL,
+      schema     name                     NOT NULL,
+      table_name name                     NOT NULL,
+      errcount   bigint                   NOT NULL,
+      PRIMARY KEY (schema, table_name, log_time)
    );
 
    /* reset client_min_messages */
@@ -2472,7 +2492,7 @@ BEGIN
    /* check if the table exists */
    IF NOT EXISTS (
          SELECT 1 FROM tables
-         WHERE schema = $2 AND table_name = $3
+         WHERE tables.schema = $2 AND tables.table_name = $3
       )
    THEN
       RAISE EXCEPTION '%',
@@ -2591,3 +2611,59 @@ END;$$;
 
 COMMENT ON FUNCTION oracle_test_table(name, name, name, name) IS
    'test an Oracle table for potential migration problems';
+
+CREATE FUNCTION oracle_migrate_test_data(
+   server         name,
+   pgstage_schema name DEFAULT NAME 'pgsql_stage',
+   only_schemas   name[]  DEFAULT NULL
+) RETURNS bigint
+   LANGUAGE plpgsql VOLATILE SET search_path = pg_catalog AS
+$$DECLARE
+   extschema text;
+   v_schema  text;
+   v_table   text;
+BEGIN
+   /* set "search_path" to the PostgreSQL staging schema and the extension schema */
+   SELECT extnamespace::regnamespace INTO extschema
+      FROM pg_catalog.pg_extension
+      WHERE extname = 'ora_migrator';
+   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+
+   /* translate schema names to lower case */
+   only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
+
+   /* purge the error detail log */
+   TRUNCATE test_error;
+
+   /* collect the errors from each table */
+   FOR v_schema, v_table IN
+      SELECT schema, table_name FROM tables
+      WHERE only_schemas IS NULL
+         OR schema =ANY (only_schemas)
+   LOOP
+      INSERT INTO test_error
+         (schema, table_name, rowid, message)
+      SELECT v_schema,
+             v_table,
+             err.rowid,
+             err.message
+      FROM oracle_test_table(server, v_schema, v_table, pgstage_schema) AS err;
+   END LOOP;
+
+   /* add error summary to the statistics table */
+   INSERT INTO test_error_stats
+      (log_time, schema, table_name, errcount)
+   SELECT current_timestamp,
+          schema,
+          table_name,
+          count(*)
+   FROM test_error
+   GROUP BY schema, table_name;
+
+   RETURN (SELECT sum(errcount)
+           FROM test_error_stats
+           WHERE log_time = current_timestamp);
+END;$$;
+
+COMMENT ON FUNCTION oracle_migrate_test_data(name, name, name[]) IS
+   'test all Oracle table for potential migration problems';

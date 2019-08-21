@@ -436,6 +436,30 @@ Other functions
 
   - values in string columns that are not in the database encoding
 
+- Function `oracle_migrate_test_data`:
+
+  This function calls `oracle_test_table` for all tables in the
+  PostgreSQL staging schema and records the results in the table `test_error`
+  in the PostgreSQL stage (after emptying the table).
+
+  In addition, an error summary is added to the table `test_error_stats`
+  in the PostgreSQL stage.  This is useful for measuring the progress of
+  cleaning up bad data in Oracle over time.
+
+  The function returns the total number of errors encountered.
+
+  The function parameters are:
+
+  - `server`: the name of the Oracle foreign server
+
+  - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
+    created by `oracle_migrate_prepare`.
+
+  - `only_schemas` (default NULL): An array of Oracle schema names
+    that should be migrated to PostgreSQL. If NULL, all schemas except Oracle
+    system schemas are processed.  
+    The names must be as they appear in Oracle, which is usually in upper case.
+
 - Function `create_oraviews`:
 
   This function creates a number of foreign tables and views for
