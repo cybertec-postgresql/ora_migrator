@@ -1289,14 +1289,14 @@ BEGIN
       SELECT 'tables'::text                 AS task_type,
              count(*)::bigint               AS task_content,
              'table'::text                  AS task_unit,
-             ((count(*) + 9) / 10)::integer AS migration_hours
+             ceil(count(*) / 10.0)::integer AS migration_hours
       FROM tables
       WHERE migrate
    UNION ALL
       SELECT 'data_migration'::text,
              sum(bytes)::bigint,
              'bytes'::text,
-             sqrt(sum(bytes::float8) / 1073741824 + 1)::integer
+             ceil(sum(bytes::float8) / 26843545600.0)::integer
       FROM segments AS s
          JOIN tables AS t
             ON s.schema = t.oracle_schema
@@ -1307,7 +1307,7 @@ BEGIN
       SELECT object_type::text,
              bytes::bigint,
              'characters'::text,
-             ((bytes + 3999) / 4000)::integer
+             ceil(bytes / 1024.0)::integer
       FROM oracle_code_count() AS q;
 
    /* reset client_min_messages */
