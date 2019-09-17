@@ -710,7 +710,7 @@ BEGIN
    END;
 
    EXECUTE 'SET LOCAL client_min_messages = ' || old_msglevel;
-   RAISE NOTICE 'Copy definitions to PostgreSQL staging schema "%" ...', pgstage_schema;
+   RAISE NOTICE 'Copying definitions to PostgreSQL staging schema "%" ...', pgstage_schema;
    SET LOCAL client_min_messages = warning;
 
    /* get the postgis geometry type if it exists */
