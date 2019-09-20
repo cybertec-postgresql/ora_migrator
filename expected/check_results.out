@@ -83,7 +83,7 @@ Indexes:
 Foreign-key constraints:
     "tab2_tab1_id_fkey" FOREIGN KEY (tab1_id) REFERENCES testschema1.tab1(id)
 Referenced by:
-    TABLE "testschema2.tab3" CONSTRAINT "tab3_tab2_id_fkey" FOREIGN KEY (tab2_id) REFERENCES testschema1.tab2(id)
+    TABLE "testschema2.tab3" CONSTRAINT "tab3_tab2_id_fkey" FOREIGN KEY (tab2_id) REFERENCES testschema1.tab2(id) ON DELETE CASCADE
 
  Index "testschema1.tab2_pkey"
  Column |  Type   | Definition 
@@ -108,7 +108,7 @@ primary key, btree, for table "testschema1.tab2"
 Indexes:
     "tab3_pkey" PRIMARY KEY, btree (id)
 Foreign-key constraints:
-    "tab3_tab2_id_fkey" FOREIGN KEY (tab2_id) REFERENCES testschema1.tab2(id)
+    "tab3_tab2_id_fkey" FOREIGN KEY (tab2_id) REFERENCES testschema1.tab2(id) ON DELETE CASCADE
 
  Index "testschema2.tab3_pkey"
  Column |  Type   | Definition 

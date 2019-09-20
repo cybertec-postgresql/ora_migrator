@@ -2116,7 +2116,8 @@ BEGIN
 
          stmt := format('ALTER TABLE %I.%I ADD FOREIGN KEY (', loc_s, loc_t);
          stmt_middle := format(') REFERENCES %I.%I (', rem_s, rem_t);
-         stmt_suffix := format(')%s DEFERRABLE INITIALLY %s',
+         stmt_suffix := format(') ON DELETE %s%s DEFERRABLE INITIALLY %s',
+                              delrule,
                               CASE WHEN candefer THEN '' ELSE ' NOT' END,
                               CASE WHEN is_deferred THEN 'DEFERRED' ELSE 'IMMEDIATE' END);
          old_s := loc_s;

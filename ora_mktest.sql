@@ -131,7 +131,7 @@ CONNECT testschema2/good_password
 CREATE TABLE tab3 (
    id        NUMBER(5) CONSTRAINT tab3_pkey PRIMARY KEY,
    tab2_id   NUMBER(5) CONSTRAINT tab3_tab2_id_null NOT NULL
-                       CONSTRAINT tab3_fkey REFERENCES testschema1.tab2(id),
+                       CONSTRAINT tab3_fkey REFERENCES testschema1.tab2(id) ON DELETE CASCADE,
    f         FLOAT(5),
    ids       INTERVAL DAY TO SECOND
 );
