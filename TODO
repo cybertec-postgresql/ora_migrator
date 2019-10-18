@@ -3,10 +3,6 @@ List of things to do
 
 - Support GENERATED AS IDENTITY with later Oracle versions.
 
-- Create a table "indexes" with a "migrate" column in the PostgreSQL stage
-  to allow excluding certain indexes from the migration.
-  See issue #22.
-
 - Refactor the code to create an abstraction layer that allows migration
   from other databases using other foreign data wrappers.
   This is a hard one.

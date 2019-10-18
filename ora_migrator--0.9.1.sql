@@ -925,6 +925,17 @@ BEGIN
                   staging_schema)
       USING only_schemas;
 
+   /* refresh "indexes" table */
+   INSERT INTO indexes (schema, table_name, index_name, uniqueness)
+      SELECT DISTINCT schema,
+                      table_name,
+                      index_name,
+                      uniqueness
+      FROM index_columns
+   ON CONFLICT ON CONSTRAINT indexes_pkey DO UPDATE SET
+      table_name = EXCLUDED.table_name,
+      uniqueness = EXCLUDED.uniqueness;
+
    /* copy "schemas" table */
    EXECUTE format(E'INSERT INTO schemas (schema)\n'
                    '   SELECT oracle_tolower(schema)\n'
@@ -1205,6 +1216,16 @@ BEGIN
       column_name   text    NOT NULL,
       CONSTRAINT index_columns_pkey
          PRIMARY KEY (schema, index_name, position)
+   );
+
+   CREATE TABLE indexes (
+      schema     name    NOT NULL,
+      table_name name    NOT NULL,
+      index_name name    NOT NULL,
+      uniqueness boolean NOT NULL,
+      migrate    boolean NOT NULL DEFAULT TRUE,
+      CONSTRAINT indexes_pkey
+         PRIMARY KEY (schema, index_name)
    );
 
    CREATE TABLE schemas (
@@ -2261,11 +2282,14 @@ BEGIN
    FOR loc_s, loc_t, ind_name, uniq, colpos, des, is_expr, expr IN
       SELECT schema, table_name, i.index_name, i.uniqueness, i.position, i.descend, i.is_expression, i.column_name
       FROM index_columns i
+         JOIN indexes ind
+            USING (schema, table_name, index_name)
          JOIN tables t
             USING (schema, table_name)
       WHERE (only_schemas IS NULL
          OR schema =ANY (only_schemas))
         AND t.migrate
+        AND ind.migrate
       ORDER BY schema, table_name, i.index_name, i.position
    LOOP
       IF old_s <> loc_s OR old_t <> loc_t OR old_c <> ind_name THEN

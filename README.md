@@ -372,6 +372,9 @@ Migration functions
     system schemas are processed.  
     The names must be as they appear in Oracle, which is usually in upper case.
 
+  Indexes are only migrated if the `migrate` flag on the corresponding entries
+  in the `tables` and `indexes` table in the PostgreSQL staging schema are set.
+
   The return value is the number of captured errors that have been turned
   into warnings.
 
