@@ -2280,7 +2280,7 @@ BEGIN
    old_t := '';
    old_c := '';
    FOR loc_s, loc_t, ind_name, uniq, colpos, des, is_expr, expr IN
-      SELECT schema, table_name, i.index_name, i.uniqueness, i.position, i.descend, i.is_expression, i.column_name
+      SELECT schema, table_name, i.index_name, ind.uniqueness, i.position, i.descend, i.is_expression, i.column_name
       FROM index_columns i
          JOIN indexes ind
             USING (schema, table_name, index_name)
