@@ -1616,7 +1616,7 @@ BEGIN
 END;$$;
 
 COMMENT ON FUNCTION oracle_migrate_mkforeign(name, name, name, name[], integer) IS
-   'second step of "oracle_migrate": create schemas, sequemces and foreign tables';
+   'second step of "oracle_migrate": create schemas, sequences and foreign tables';
 
 CREATE FUNCTION oracle_migrate_tables(
    staging_schema name    DEFAULT NAME 'ora_stage',
