@@ -13,6 +13,7 @@ DROP ROLE IF EXISTS migrator;
 CREATE ROLE migrator LOGIN;
 /* create all requisite extensions */
 CREATE EXTENSION oracle_fdw;
+CREATE EXTENSION db_migrator;
 CREATE EXTENSION ora_migrator;
 /* create a foreign server and a user mapping */
 CREATE SERVER oracle FOREIGN DATA WRAPPER oracle_fdw
@@ -26,24 +27,34 @@ GRANT USAGE ON FOREIGN SERVER oracle TO migrator;
 \connect - migrator
 SET client_min_messages = WARNING;
 /* set up staging schemas */
-SELECT oracle_migrate_prepare(
-   server => 'oracle', 
+SELECT db_migrate_prepare(
+   plugin => 'ora_migrator',
+   server => 'oracle',
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2'],
-   max_long => 1024
+   options => JSONB '{"max_long": 1024}'
 );
- oracle_migrate_prepare 
-------------------------
-                      0
+ db_migrate_prepare 
+--------------------
+                  0
 (1 row)
 
-SELECT * FROM oracle_code_count();
- object_type | number | lines | bytes 
--------------+--------+-------+-------
- function    |      1 |     3 |    68
- trigger     |      1 |     4 |   120
- package     |      0 |     0 |     0
- view        |      1 |     2 |    76
-(4 rows)
+SELECT schema, task_type, task_content, task_unit, sum(migration_hours)
+FROM fdw_stage.migration_cost_estimate
+WHERE schema IN ('TESTSCHEMA1', 'TESTSCHEMA2')
+GROUP BY GROUPING SETS ((schema, task_type, task_content, task_unit), (schema))
+ORDER BY schema, task_type;
+   schema    |   task_type    | task_content | task_unit  | sum 
+-------------+----------------+--------------+------------+-----
+ TESTSCHEMA1 | data_migration |       262144 | bytes      |   1
+ TESTSCHEMA1 | functions      |           68 | characters |   1
+ TESTSCHEMA1 | tables         |            4 | count      |   1
+ TESTSCHEMA1 | triggers       |          120 | characters |   1
+ TESTSCHEMA1 | views          |           76 | characters |   1
+ TESTSCHEMA1 |                |              |            |   5
+ TESTSCHEMA2 | data_migration |        65536 | bytes      |   1
+ TESTSCHEMA2 | tables         |            1 | count      |   1
+ TESTSCHEMA2 |                |              |            |   2
+(9 rows)
 
 /* edit some values in the staging schema */
 UPDATE pgsql_stage.triggers
@@ -80,58 +91,65 @@ ORDER BY message;
 (2 rows)
 
 /* perform the migration */
-SELECT oracle_migrate_mkforeign(
-   server => 'oracle', 
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2'],
-   max_long => 1024
+SELECT db_migrate_mkforeign(
+   plugin => 'ora_migrator',
+   server => 'oracle',
+   options => JSONB '{"max_long": 1024}'
 );
- oracle_migrate_mkforeign 
---------------------------
-                        0
+ db_migrate_mkforeign 
+----------------------
+                    0
 (1 row)
 
-SELECT oracle_migrate_tables(
+SELECT oracle_migrate_test_data(
+   server => 'oracle',
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+ERROR:  relation "test_error" does not exist
+CONTEXT:  SQL statement "TRUNCATE test_error"
+PL/pgSQL function public.oracle_migrate_test_data(name,name,name[]) line 16 at SQL statement
+SELECT db_migrate_tables(
+   plugin => 'ora_migrator'
 );
 WARNING:  Error loading table data for testschema1.baddata
 DETAIL:  invalid byte sequence for encoding "UTF8": 0x00: 
- oracle_migrate_tables 
------------------------
-                     1
+ db_migrate_tables 
+-------------------
+                 1
 (1 row)
 
-SELECT oracle_migrate_constraints(
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+SELECT db_migrate_constraints(
+   plugin => 'ora_migrator'
 );
 WARNING:  Error creating primary key or unique constraint on table testschema1.baddata
 DETAIL:  relation "testschema1.baddata" does not exist: 
- oracle_migrate_constraints 
-----------------------------
-                          1
+ db_migrate_constraints 
+------------------------
+                      1
 (1 row)
 
-SELECT oracle_migrate_functions(
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+SELECT db_migrate_functions(
+   plugin => 'ora_migrator'
 );
- oracle_migrate_functions 
---------------------------
-                        0
-(1 row)
-
-SELECT oracle_migrate_triggers(
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
-);
- oracle_migrate_triggers 
--------------------------
-                       0
-(1 row)
-
-SELECT oracle_migrate_views(
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
-);
- oracle_migrate_views 
+ db_migrate_functions 
 ----------------------
                     0
+(1 row)
+
+SELECT db_migrate_triggers(
+   plugin => 'ora_migrator'
+);
+ db_migrate_triggers 
+---------------------
+                   0
+(1 row)
+
+SELECT db_migrate_views(
+   plugin => 'ora_migrator'
+);
+ db_migrate_views 
+------------------
+                0
 (1 row)
 
 /* we have to check the log table before we drop the schema */
@@ -144,9 +162,9 @@ ORDER BY log_time;
  unique constraint | testschema1 | baddata     | ALTER TABLE testschema1.baddata ADD PRIMARY KEY (id) NOT DEFERRABLE INITIALLY IMMEDIATE | relation "testschema1.baddata" does not exist: 
 (2 rows)
 
-SELECT oracle_migrate_finish();
- oracle_migrate_finish 
------------------------
-                     0
+SELECT db_migrate_finish();
+ db_migrate_finish 
+-------------------
+                 0
 (1 row)
 

@@ -17,6 +17,7 @@ CREATE ROLE migrator LOGIN;
 
 /* create all requisite extensions */
 CREATE EXTENSION oracle_fdw;
+CREATE EXTENSION db_migrator;
 CREATE EXTENSION ora_migrator;
 
 /* create a foreign server and a user mapping */
@@ -37,13 +38,18 @@ GRANT USAGE ON FOREIGN SERVER oracle TO migrator;
 SET client_min_messages = WARNING;
 
 /* set up staging schemas */
-SELECT oracle_migrate_prepare(
-   server => 'oracle', 
+SELECT db_migrate_prepare(
+   plugin => 'ora_migrator',
+   server => 'oracle',
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2'],
-   max_long => 1024
+   options => JSONB '{"max_long": 1024}'
 );
 
-SELECT * FROM oracle_code_count();
+SELECT schema, task_type, task_content, task_unit, sum(migration_hours)
+FROM fdw_stage.migration_cost_estimate
+WHERE schema IN ('TESTSCHEMA1', 'TESTSCHEMA2')
+GROUP BY GROUPING SETS ((schema, task_type, task_content, task_unit), (schema))
+ORDER BY schema, task_type;
 
 /* edit some values in the staging schema */
 UPDATE pgsql_stage.triggers
@@ -79,30 +85,35 @@ FROM oracle_test_table('oracle', 'testschema1', 'baddata')
 ORDER BY message;
 
 /* perform the migration */
-SELECT oracle_migrate_mkforeign(
-   server => 'oracle', 
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2'],
-   max_long => 1024
+SELECT db_migrate_mkforeign(
+   plugin => 'ora_migrator',
+   server => 'oracle',
+   options => JSONB '{"max_long": 1024}'
 );
 
-SELECT oracle_migrate_tables(
+SELECT oracle_migrate_test_data(
+   server => 'oracle',
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
 );
 
-SELECT oracle_migrate_constraints(
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+SELECT db_migrate_tables(
+   plugin => 'ora_migrator'
 );
 
-SELECT oracle_migrate_functions(
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+SELECT db_migrate_constraints(
+   plugin => 'ora_migrator'
 );
 
-SELECT oracle_migrate_triggers(
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+SELECT db_migrate_functions(
+   plugin => 'ora_migrator'
 );
 
-SELECT oracle_migrate_views(
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+SELECT db_migrate_triggers(
+   plugin => 'ora_migrator'
+);
+
+SELECT db_migrate_views(
+   plugin => 'ora_migrator'
 );
 
 /* we have to check the log table before we drop the schema */
@@ -110,4 +121,4 @@ SELECT operation, schema_name, object_name, failed_sql, error_message
 FROM pgsql_stage.migrate_log
 ORDER BY log_time;
 
-SELECT oracle_migrate_finish();
+SELECT db_migrate_finish();

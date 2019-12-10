@@ -1,5 +1,5 @@
 comment = 'Tools to migrate Oracle databases to PostgreSQL'
-default_version = '0.9.1'
-requires = 'oracle_fdw'
+default_version = '0.9.2'
+requires = 'oracle_fdw, db_migrator'
 superuser = false
 relocatable = true
