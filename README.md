@@ -10,7 +10,7 @@ as well as additional features that are not covered in the general
 documentation.
 
 
- [migrator]: https://github.com/cybertec-postgresql/ora_migrator
+ [migrator]: https://github.com/cybertec-postgresql/db_migrator
  [fdw]: http://laurenz.github.io/oracle_fdw/
 
 Prerequisites
