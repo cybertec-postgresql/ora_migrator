@@ -105,9 +105,11 @@ SELECT oracle_migrate_test_data(
    server => 'oracle',
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
 );
-ERROR:  relation "test_error" does not exist
-CONTEXT:  SQL statement "TRUNCATE test_error"
-PL/pgSQL function public.oracle_migrate_test_data(name,name,name[]) line 16 at SQL statement
+ oracle_migrate_test_data 
+--------------------------
+                        2
+(1 row)
+
 SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );

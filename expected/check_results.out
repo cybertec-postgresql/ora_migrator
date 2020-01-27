@@ -127,21 +127,21 @@ ORDER BY proname;
  tomorrow  | date       | [0:0]={date}
 (2 rows)
 
-SELECT * FROM testschema1.tab1;
+SELECT * FROM testschema1.tab1 ORDER BY id;
  id |    vc     |   n   |   bf   |   bd   |            d             |            ts            
 ----+-----------+-------+--------+--------+--------------------------+--------------------------
   1 | some text | 12345 |   3.14 | -2.718 | Fri Jan 26 00:00:00 2018 | Fri Jan 26 22:30:00 2018
   2 |           | 87654 | 9.3452 |        | Fri Dec 29 12:00:00 2017 | 
 (2 rows)
 
-SELECT * FROM testschema1.tab2;
+SELECT * FROM testschema1.tab2 ORDER BY id;
  id | tab1_id |      c      |     b      
 ----+---------+-------------+------------
   1 |       1 | a long text | \xdeadbeef
   2 |       1 |             | \xdeadf00d
 (2 rows)
 
-SELECT * FROM testschema1.view1;
+SELECT * FROM testschema1.view1 ORDER BY vc, c;
     vc     |      c      
 -----------+-------------
  some text | a long text
@@ -149,7 +149,7 @@ SELECT * FROM testschema1.view1;
            | 
 (3 rows)
 
-SELECT * FROM testschema2.tab3;
+SELECT * FROM testschema2.tab3 ORDER BY id;
  id | tab2_id |  f  |       ids        
 ----+---------+-----+------------------
   1 |       2 | 2.5 | @ 1 day 12 hours

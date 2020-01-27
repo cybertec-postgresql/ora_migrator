@@ -11,10 +11,10 @@ FROM pg_catalog.pg_proc
 WHERE pronamespace = 'testschema1'::regnamespace
 ORDER BY proname;
 
-SELECT * FROM testschema1.tab1;
+SELECT * FROM testschema1.tab1 ORDER BY id;
 
-SELECT * FROM testschema1.tab2;
+SELECT * FROM testschema1.tab2 ORDER BY id;
 
-SELECT * FROM testschema1.view1;
+SELECT * FROM testschema1.view1 ORDER BY vc, c;
 
-SELECT * FROM testschema2.tab3;
+SELECT * FROM testschema2.tab3 ORDER BY id;

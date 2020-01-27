@@ -920,6 +920,7 @@ COMMENT ON FUNCTION oracle_test_table(name, name, name, name) IS
 
 CREATE FUNCTION oracle_migrate_test_data(
    server         name,
+   staging_schema name   DEFAULT NAME 'fdw_stage',
    pgstage_schema name   DEFAULT NAME 'pgsql_stage',
    only_schemas   name[] DEFAULT NULL
 ) RETURNS bigint
@@ -928,6 +929,7 @@ $$DECLARE
    extschema text;
    v_schema  text;
    v_table   text;
+   v_result  bigint;
 BEGIN
    /* set "search_path" to the FDW staging schema and the extension schema */
    SELECT extnamespace::regnamespace INTO extschema
@@ -939,7 +941,7 @@ BEGIN
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
 
    /* purge the error detail log */
-   TRUNCATE test_error;
+   EXECUTE format('TRUNCATE %I.test_error', staging_schema);
 
    /* collect the errors from each table */
    FOR v_schema, v_table IN
@@ -947,31 +949,48 @@ BEGIN
       WHERE only_schemas IS NULL
          OR schema =ANY (only_schemas)
    LOOP
-      INSERT INTO test_error
-         (schema, table_name, rowid, message)
-      SELECT v_schema,
-             v_table,
-             err.rowid,
-             err.message
-      FROM oracle_test_table(server, v_schema, v_table, pgstage_schema) AS err;
+      EXECUTE
+         format(
+            E'INSERT INTO %I.test_error\n'
+            '   (schema, table_name, rowid, message)\n'
+            'SELECT $1,\n'
+            '       $2,\n'
+            '       err.rowid,\n'
+            '       err.message\n'
+            'FROM oracle_test_table($3, $4, $5, $6) AS err',
+            staging_schema
+         )
+      USING v_schema, v_table, server, v_schema, v_table, pgstage_schema;
    END LOOP;
 
    /* add error summary to the statistics table */
-   INSERT INTO test_error_stats
-      (log_time, schema, table_name, errcount)
-   SELECT current_timestamp,
-          schema,
-          table_name,
-          count(*)
-   FROM test_error
-   GROUP BY schema, table_name;
+   EXECUTE
+      format(
+         E'INSERT INTO %I.test_error_stats\n'
+         '   (log_time, schema, table_name, errcount)\n'
+         'SELECT current_timestamp,\n'
+         '       schema,\n'
+         '       table_name,\n'
+         '       count(*)\n'
+         'FROM %I.test_error\n'
+         'GROUP BY schema, table_name',
+         staging_schema,
+         staging_schema
+      );
 
-   RETURN (SELECT sum(errcount)
-           FROM test_error_stats
-           WHERE log_time = current_timestamp);
+   EXECUTE
+      format(
+         E'SELECT sum(errcount)\n'
+         'FROM %I.test_error_stats\n'
+         'WHERE log_time = current_timestamp',
+         staging_schema
+      )
+   INTO v_result;
+
+   RETURN v_result;
 END;$$;
 
-COMMENT ON FUNCTION oracle_migrate_test_data(name,name,name[]) IS
+COMMENT ON FUNCTION oracle_migrate_test_data(name,name,name,name[]) IS
    'test all Oracle table for potential migration problems';
 
 CREATE FUNCTION db_migrator_callback(

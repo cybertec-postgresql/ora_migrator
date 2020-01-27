@@ -184,6 +184,8 @@ The function parameters are:
 
 - `server`: the name of the Oracle foreign server
 
+- `staging_schema` (default `fdw_stage`): name of the remote staging schema
+
 - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
   created by `oracle_migrate_prepare`.
 
