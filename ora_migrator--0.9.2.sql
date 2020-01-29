@@ -1077,7 +1077,7 @@ BEGIN
             E'CREATE FOREIGN TABLE %I (\n'
             '   "__Operation" varchar(1) NOT NULL,\n'
             '   "__Time" timestamp without time zone OPTIONS (key ''true'') NOT NULL',
-            '__Log_' || v_tabname
+            '__Log_' || v_tabschema || '/' || v_tabname
          );
 
       FOR v_colname, v_orig_column, v_type, v_orig_type, v_is_pkey IN

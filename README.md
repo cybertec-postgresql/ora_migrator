@@ -247,8 +247,8 @@ set to `TRUE`, the following objects are created:
 
 - an Oracle trigger `__Log_<tablename>_TRIG` on `<tablename>`
 
-- a PostgreSQL foreign table `__Log_<tablename>` for the Oracle change log
-  table
+- a PostgreSQL foreign table `__Log_<schema>/<tablename>` for the Oracle change
+  log table
 
 Replication
 ===========
