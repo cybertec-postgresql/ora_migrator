@@ -9,6 +9,10 @@ this README only covers the installation and setup of the plugin
 as well as additional features that are not covered in the general
 documentation.
 
+In addition to that, `ora_migrator` offers a replication functionality
+from Oracle to PostgreSQL which can be used for almost zero down time
+migration from Oracle.  See [Replication](#replication) for details.
+
 
  [migrator]: https://github.com/cybertec-postgresql/db_migrator
  [fdw]: http://laurenz.github.io/oracle_fdw/
@@ -53,6 +57,14 @@ Prerequisites
 
   You can choose to grant the user the `SELECT ANY DICTIONARY`
   system privilege instead, which includes all of the above.
+
+- To use replication, the user must have the `CREATE TABLE` and
+  `CREATE TRIGGER` privileges.
+
+  To use replication for tables not owned by the Oracle user, the user must
+  have the `CREATE ANY TABLE`, `CREATE ANY INDEX`, `CREATE ANY TRIGGER`,
+  `DROP ANY TABLE` and `SELECT ANY TABLE` privilege (this is required to
+  create and drop logging tables and triggers).
 
 Installation
 ============
@@ -198,6 +210,102 @@ The function parameters are:
 
 These tables contain individual and summary results for runs of
 `oracle_migrate_test_data`.
+
+Replication functions
+---------------------
+
+### function `oracle_replication_start` ###
+
+This function creates all the objects necessary for replication in the
+Oracle and PostgreSQL databases.  PostgreSQL objects will be created in the
+Postgres staging schema, Oracle objects in the same schema as the replicated
+table.
+
+This function should be called right before `db_migrate_tables`, and no
+data modification activity should occur on Oracle between the time when you
+start `oracle_replication_start` and the time you call `db_migrate_tables`.
+
+The function parameters are:
+
+- `server`: the name of the Oracle foreign server
+
+- `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
+  created by `oracle_migrate_prepare`
+
+The objects created by the function are:
+
+- a PostgreSQL foreign table `__ReplicationEnd` that shows a timestamp
+  guaranteed to be earlier than the oldest active transaction on Oracle
+
+- a PostgreSQL table `__ReplicationStart` used to store the starting point for
+  the next replication catch-up
+
+For each table in the `tables` table of the Postgres stage that has `migrate`
+set to `TRUE`, the following objects are created:
+
+- an Oracle table `__Log_<tablename>` to collect changes to `<tablename>`
+
+- an Oracle trigger `__Log_<tablename>_TRIG` on `<tablename>`
+
+- a PostgreSQL foreign table `__Log_<tablename>` for the Oracle change log
+  table
+
+Replication
+===========
+
+`ora_migrator` offers a simple trigger-based replication functionality
+from Oracle to PostgreSQL.
+
+This can be used to migrate databases from Oracle to PostgreSQL with
+almost no down time.
+
+The procedure is as follows:
+
+- Prepare migration as described in the `db_migrator` documentation
+  by calling `db_migrate_prepare` and `db_migrate_mkforeign`.
+
+- Suspend all data modification activity on the Oracle database.
+  This is necessary because Oracle does not support transactional DDL.
+
+- Then call `oracle_replication_start` to set up all the required
+  objects.  This will create log tables and triggers in the Oracle
+  database.
+
+- Then start the data migration as usual with `db_migrate_tables`.
+
+  As soon as `db_migrate_tables` has started, data modification
+  activity on the Oracle database can resume.  The migration will run
+  using the `SERIALIZABLE` transaction isolation level, so the
+  migrated data will be consistent.
+
+  Make sure that you have enough UNDO space on Oracle, else the data
+  migration may fail.
+
+- Migrate constraints and indexes with `db_migrate_constraints` and
+  other objects as described in the `db_migrator` documentation.
+
+- At any time, you can call `oracle_replication_catchup` to transfer
+  changed data from Oracle to PostgreSQL.
+
+  This calls `oracle_catchup_table` for all affected tables, so to
+  parallelize operation, you can call that latter function directly
+  for all affected tables.
+
+  Note that catching up will *not* purge the log tables on Oracle.
+
+  To avoid problems with foreign key constraints in PostgreSQL, make
+  sure that the configuration parameter `session_replication_role`
+  is set to `replica` while you are running `oracle_catchup_table`.
+
+  For near-zero down time migration, the last call to
+  `oracle_replication_catchup` must also be performed while there
+  is no data modification activity on the Oracle database.
+  After that call, switch the application over to PostgreSQL.
+
+- To end replication, call `oracle_replication_finish`.
+  That will delete all the objects created for replication.
+
+- Finally, call `db_migrate_finish` to drop all auxiliary objects.
 
 Support
 =======

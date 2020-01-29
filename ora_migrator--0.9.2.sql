@@ -993,6 +993,216 @@ END;$$;
 COMMENT ON FUNCTION oracle_migrate_test_data(name,name,name,name[]) IS
    'test all Oracle table for potential migration problems';
 
+CREATE FUNCTION oracle_replication_start(
+   server         name,
+   pgstage_schema name DEFAULT NAME 'pgsql_stage'
+) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS
+$_$DECLARE
+   v_fdw_extschema   text;
+   v_tabname         text;
+   v_tabschema       text;
+   v_colname         text;
+   v_type            text;
+   v_orig_schema     text;
+   v_orig_table      text;
+   v_orig_column     text;
+   v_orig_type       text;
+   v_is_pkey         boolean;
+   v_create_logtable text;
+   v_pkey_list       text;
+   v_quote_pkey_list text;
+   v_sep             text;
+   v_col_list        text;
+   v_new_col_list    text;
+   v_old_col_list    text;
+   v_create_foreign  text;
+BEGIN
+   SELECT extnamespace::regnamespace::text INTO v_fdw_extschema
+   FROM pg_extension
+   WHERE extname = 'oracle_fdw';
+
+   EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
+
+   /* create a foreign table for the oldest active Oracle transaction */
+   EXECUTE
+      format(
+         E'CREATE FOREIGN TABLE "__ReplicationEnd" (\n'
+         '   ts timestamp(0) without time zone NOT NULL\n'
+         ') SERVER %I OPTIONS (table E'''
+         '(SELECT coalesce(\\n'
+         '    min(\\n'
+         '       to_date(start_time, ''''MM/DD/YY HH24:MI:SS'''')\\n'
+         '    ),\\n'
+         '    sysdate\\n'
+         ')\\n'
+         '- INTERVAL ''''1'''' SECOND AS ts\\n'
+         'FROM v$transaction)'')',
+         server
+      );
+
+   /* create a table that will hold the replication start time */
+   CREATE TABLE "__ReplicationStart" (
+      ts timestamp(0) without time zone NOT NULL
+   );
+   INSERT INTO "__ReplicationStart" (ts) VALUES ('2000-01-01 00:00:00');
+
+   FOR v_tabschema, v_orig_schema, v_tabname, v_orig_table IN
+      SELECT s.schema, s.orig_schema, t.table_name, t.orig_table
+      FROM schemas AS s
+         JOIN tables AS t USING (schema)
+      WHERE t.migrate
+   LOOP
+      /* create Oracle SQL statements for log table and trigger */
+      v_create_logtable :=
+         format(
+            E'CREATE TABLE "%s"."__Log_%s" (\n'
+            '   "__Operation" VARCHAR2(1 BYTE) CONSTRAINT "__Log_%s_Operation_NULL" NOT NULL,\n'
+            '   "__Time" TIMESTAMP(6)',
+            v_orig_schema,
+            v_orig_table,
+            v_orig_table
+         );
+
+      v_pkey_list := '';
+      v_quote_pkey_list := '';
+      v_col_list := '';
+      v_new_col_list := '';
+      v_old_col_list := '';
+
+      v_sep := '';
+
+      /* also create an SQL statement for a foreign table for the log table */
+      v_create_foreign :=
+         format(
+            E'CREATE FOREIGN TABLE %I (\n'
+            '   "__Operation" varchar(1) NOT NULL,\n'
+            '   "__Time" timestamp without time zone OPTIONS (key ''true'') NOT NULL',
+            '__Log_' || v_tabname
+         );
+
+      FOR v_colname, v_orig_column, v_type, v_orig_type, v_is_pkey IN
+         SELECT c.column_name,
+                c.orig_column,
+                c.type_name,
+                c.orig_type,
+                coalesce(k.is_pkey, FALSE)
+         FROM columns AS c
+            LEFT JOIN (SELECT schema,
+                              table_name,
+                              column_name,
+                              TRUE AS is_pkey
+                       FROM keys
+                       WHERE is_primary) AS k
+               USING (schema, table_name, column_name)
+         WHERE schema = v_tabschema
+           AND table_name = v_tabname
+         ORDER BY c.position
+      LOOP
+         v_create_logtable := v_create_logtable ||
+            format(E',\n   "%s" %s', v_orig_column, v_orig_type);
+
+         v_create_foreign := v_create_foreign ||
+            format(E',\n   %I %s', v_colname, v_type);
+
+         v_col_list := v_col_list ||
+            format(E', "%s"', v_orig_column);
+
+         v_new_col_list := v_new_col_list ||
+            format(E', :NEW."%s"', v_orig_column);
+
+         IF v_is_pkey THEN
+            v_create_foreign := v_create_foreign ||
+               ' OPTIONS (key ''true'') NOT NULL';
+
+            v_old_col_list := v_old_col_list ||
+               format(E', :OLD."%s"', v_orig_column);
+
+            v_pkey_list := v_pkey_list ||
+               format(E', "%s"', v_orig_column);
+
+            v_quote_pkey_list := v_quote_pkey_list || v_sep ||
+               format(E'%L', v_orig_column);
+            v_sep := ', ';
+         END IF;
+      END LOOP;
+
+      /* create Oracle log table */
+      EXECUTE
+         format(
+            E'SELECT %I.oracle_execute(%L,\n%L\n)',
+            v_fdw_extschema,
+            server,
+            v_create_logtable ||
+               format(
+                  E',\n   PRIMARY KEY("__Time"%s)\n) SEGMENT CREATION IMMEDIATE',
+                  v_pkey_list
+               )
+         );
+
+      /* create Oracle trigger */
+      EXECUTE
+         format(
+            E'SELECT %I.oracle_execute(%L,\n%L\n)',
+            v_fdw_extschema,
+            server,
+            format(
+               E'CREATE TRIGGER "%s"."__Log_%s_TRIG"\n'
+               '   AFTER INSERT OR UPDATE OR DELETE ON "%s"."%s" FOR EACH ROW\n'
+               'BEGIN\n'
+               '   CASE\n'
+               '      WHEN INSERTING THEN\n'
+               '         INSERT INTO "__Log_%s" ("__Operation", "__Time"%s)\n'
+               '         VALUES (''I''%s);\n'
+               '      WHEN UPDATING(%s) THEN\n'
+               '         INSERT INTO "__Log_%s" ("__Operation", "__Time"%s)\n'
+               '         VALUES (''D'', localtimestamp%s);\n'
+               '         INSERT INTO "__Log_%s" ("__Operation", "__Time"%s)\n'
+               '         VALUES (''I'', localtimestamp%s);\n'
+               '      WHEN UPDATING THEN\n'
+               '         INSERT INTO "__Log_%s" ("__Operation", "__Time"%s)\n'
+               '         VALUES (''U'', localtimestamp%s);\n'
+               '      WHEN DELETING THEN\n'
+               '         INSERT INTO "__Log_%s" ("__Operation", "__Time"%s)\n'
+               '         VALUES (''D'', localtimestamp%s);\n'
+               '   END CASE;\n'
+               'END;',
+               v_orig_schema,
+               v_orig_table,
+               v_orig_schema,
+               v_orig_table,
+               v_orig_table,
+               v_col_list,
+               v_new_col_list,
+               v_quote_pkey_list,
+               v_orig_table,
+               v_pkey_list,
+               v_old_col_list,
+               v_orig_table,
+               v_col_list,
+               v_new_col_list,
+               v_orig_table,
+               v_col_list,
+               v_new_col_list,
+               v_orig_table,
+               v_pkey_list,
+               v_old_col_list
+            )
+         );
+
+      /* create foreign table */
+      EXECUTE v_create_foreign ||
+         format(
+            E'\n) SERVER %I OPTIONS (schema %L, table %L, readonly ''true'')',
+            server,
+            v_orig_schema,
+            '__Log_' || v_orig_table
+         );
+   END LOOP;
+END;$_$;
+
+COMMENT ON FUNCTION oracle_replication_start(name,name) IS
+   'create all objects required for replication';
+
 CREATE FUNCTION db_migrator_callback(
    OUT create_metadata_views_fun regprocedure,
    OUT translate_datatype_fun    regprocedure,

@@ -37,6 +37,61 @@ GRANT USAGE ON FOREIGN SERVER oracle TO migrator;
 
 SET client_min_messages = WARNING;
 
+/* remove potential leftovers from previous tests */
+DO
+$$BEGIN
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TRIGGER testschema1."__Log_BADDATA_TRIG"');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TABLE testschema1."__Log_BADDATA" PURGE');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TRIGGER testschema1."__Log_LOG_TRIG"');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TABLE testschema1."__Log_LOG" PURGE');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TRIGGER testschema1."__Log_TAB1_TRIG"');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TABLE testschema1."__Log_TAB1" PURGE');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TRIGGER testschema1."__Log_TAB2_TRIG"');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TABLE testschema1."__Log_TAB2" PURGE');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TRIGGER testschema2."__Log_TAB3_TRIG"');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+   BEGIN
+      PERFORM oracle_execute('oracle', 'DROP TABLE testschema2."__Log_TAB3" PURGE');
+   EXCEPTION
+      WHEN fdw_unable_to_create_execution THEN NULL;
+   END;
+END;$$;
+
 /* set up staging schemas */
 SELECT db_migrate_prepare(
    plugin => 'ora_migrator',
@@ -48,6 +103,7 @@ SELECT db_migrate_prepare(
 SELECT schema, task_type, task_content, task_unit, sum(migration_hours)
 FROM fdw_stage.migration_cost_estimate
 WHERE schema IN ('TESTSCHEMA1', 'TESTSCHEMA2')
+  AND task_type <> 'data_migration'  /* size is variable */
 GROUP BY GROUPING SETS ((schema, task_type, task_content, task_unit), (schema))
 ORDER BY schema, task_type;
 
@@ -94,6 +150,10 @@ SELECT db_migrate_mkforeign(
 SELECT oracle_migrate_test_data(
    server => 'oracle',
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+
+SELECT oracle_replication_start(
+   server => 'oracle'
 );
 
 SELECT db_migrate_tables(
