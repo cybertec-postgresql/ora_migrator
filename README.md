@@ -250,6 +250,24 @@ set to `TRUE`, the following objects are created:
 - a PostgreSQL foreign table `__Log_<schema>/<tablename>` for the Oracle change
   log table
 
+### function `oracle_catchup_table' ###
+
+Copies data that have changed in an Oracle table since the last replication
+catch-up to PostgreSQL.
+
+This requires that `oracle_replication_start` has created the required objects
+and that the data migration has finished.
+
+Parameters:
+
+- `schema`: the schema of the migrated table
+
+- `table_name`: the name of the migrated table
+
+- `from_ts`: replicate changes later than that timestamp
+
+- `to_ts`: replicate changes up to and including that timestamp
+
 Replication
 ===========
 

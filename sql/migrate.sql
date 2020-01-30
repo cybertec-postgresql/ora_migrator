@@ -15,6 +15,9 @@ DROP ROLE IF EXISTS migrator;
 
 CREATE ROLE migrator LOGIN;
 
+/* triggers shouldn't run during replication */
+ALTER ROLE migrator SET session_replication_role = replica;
+
 /* create all requisite extensions */
 CREATE EXTENSION oracle_fdw;
 CREATE EXTENSION db_migrator;
@@ -90,6 +93,8 @@ $$BEGIN
    EXCEPTION
       WHEN fdw_unable_to_create_execution THEN NULL;
    END;
+   PERFORM oracle_execute('oracle', 'DELETE FROM testschema1.tab1 WHERE id >= 3');
+   PERFORM oracle_execute('oracle', 'DELETE FROM testschema1.log WHERE id >= 3');
 END;$$;
 
 /* set up staging schemas */
@@ -176,9 +181,54 @@ SELECT db_migrate_views(
    plugin => 'ora_migrator'
 );
 
+/* add some test data for replication */
+SELECT oracle_execute(
+          'oracle',
+          E'INSERT INTO tab1 (id, vc, n, bf, bd, d, ts)\n'
+          'VALUES (3, ''string'', 123, 3.14, 2.718,\n'
+          '        to_date(''2020-04-01'', ''YYYY-MM-DD''),\n'
+          '        to_timestamp(''2020-04-01 08:30:00'', ''YYYY-MM-DD HH24:MI:SS''))'
+       );
+
+SELECT oracle_execute(
+          'oracle',
+          E'INSERT INTO tab1 (id, vc, n, bf, bd, d, ts)\n'
+          'VALUES (4, ''string 2'', -123, 3.14, -2.718,\n'
+          '        to_date(''0044-03-15 BC'', ''YYYY-MM-DD AD''),\n'
+          '        to_timestamp(''0033-03-31 15:00:00'', ''YYYY-MM-DD HH24:MI:SS''))'
+       );
+
+SELECT oracle_execute(
+          'oracle',
+          E'UPDATE tab1 SET d = to_date(''1970-04-01'', ''YYYY-MM-DD''), ts = NULL WHERE id = 4'
+       );
+
+SELECT oracle_execute(
+          'oracle',
+          E'UPDATE tab1 SET id = 99, vc = ''newstring'' WHERE id = 4'
+       );
+
+SELECT oracle_execute(
+          'oracle',
+          E'DELETE FROM tab1 WHERE id = 99'
+       );
+
+/* catch up on Oracle data modifications */
+
+SELECT oracle_catchup_table(
+          'testschema1',
+          'tab1',
+          '2000-01-01 00:00:00',
+          '3000-01-01 00:00:00'
+       );
+
 /* we have to check the log table before we drop the schema */
 SELECT operation, schema_name, object_name, failed_sql, error_message
 FROM pgsql_stage.migrate_log
 ORDER BY log_time;
 
 SELECT db_migrate_finish();
+
+/* clean up Oracle test data */
+SELECT oracle_execute('oracle', 'DELETE FROM testschema1.tab1 WHERE id >= 3');
+SELECT oracle_execute('oracle', 'DELETE FROM testschema1.log WHERE id >= 3');

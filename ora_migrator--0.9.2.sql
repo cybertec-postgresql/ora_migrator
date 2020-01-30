@@ -997,7 +997,8 @@ CREATE FUNCTION oracle_replication_start(
    server         name,
    pgstage_schema name DEFAULT NAME 'pgsql_stage'
 ) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS
-$_$DECLARE
+$$DECLARE
+   v_old_path        text;
    v_fdw_extschema   text;
    v_tabname         text;
    v_tabschema       text;
@@ -1010,18 +1011,21 @@ $_$DECLARE
    v_is_pkey         boolean;
    v_create_logtable text;
    v_pkey_list       text;
-   v_quote_pkey_list text;
-   v_sep             text;
+   v_upd_col_list    text;
+   v_upd_col_sep     text;
    v_col_list        text;
    v_new_col_list    text;
    v_old_col_list    text;
    v_create_foreign  text;
 BEGIN
+   /* remember old setting and set search_path */
+   v_old_path := current_setting('search_path');
+
+   EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
+
    SELECT extnamespace::regnamespace::text INTO v_fdw_extschema
    FROM pg_extension
    WHERE extname = 'oracle_fdw';
-
-   EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
 
    /* create a foreign table for the oldest active Oracle transaction */
    EXECUTE
@@ -1064,12 +1068,12 @@ BEGIN
          );
 
       v_pkey_list := '';
-      v_quote_pkey_list := '';
+      v_upd_col_list := '';
       v_col_list := '';
       v_new_col_list := '';
       v_old_col_list := '';
 
-      v_sep := '';
+      v_upd_col_sep := '';
 
       /* also create an SQL statement for a foreign table for the log table */
       v_create_foreign :=
@@ -1120,9 +1124,10 @@ BEGIN
             v_pkey_list := v_pkey_list ||
                format(E', "%s"', v_orig_column);
 
-            v_quote_pkey_list := v_quote_pkey_list || v_sep ||
-               format(E'%L', v_orig_column);
-            v_sep := ', ';
+            v_upd_col_list := v_upd_col_list || v_upd_col_sep ||
+               format(E'UPDATING(%L)', v_orig_column);
+
+            v_upd_col_sep := ' OR ';
          END IF;
       END LOOP;
 
@@ -1152,8 +1157,8 @@ BEGIN
                '   CASE\n'
                '      WHEN INSERTING THEN\n'
                '         INSERT INTO "__Log_%s" ("__Operation", "__Time"%s)\n'
-               '         VALUES (''I''%s);\n'
-               '      WHEN UPDATING(%s) THEN\n'
+               '         VALUES (''I'', localtimestamp%s);\n'
+               '      WHEN %s THEN\n'
                '         INSERT INTO "__Log_%s" ("__Operation", "__Time"%s)\n'
                '         VALUES (''D'', localtimestamp%s);\n'
                '         INSERT INTO "__Log_%s" ("__Operation", "__Time"%s)\n'
@@ -1173,7 +1178,7 @@ BEGIN
                v_orig_table,
                v_col_list,
                v_new_col_list,
-               v_quote_pkey_list,
+               v_upd_col_list,
                v_orig_table,
                v_pkey_list,
                v_old_col_list,
@@ -1198,10 +1203,178 @@ BEGIN
             '__Log_' || v_orig_table
          );
    END LOOP;
-END;$_$;
+
+   /* reset search_path */
+   EXECUTE 'SET LOCAL search_path = ' || v_old_path;
+END;$$;
 
 COMMENT ON FUNCTION oracle_replication_start(name,name) IS
    'create all objects required for replication';
+
+CREATE FUNCTION oracle_catchup_table(
+   schema         name,
+   table_name     name,
+   from_ts        timestamp without time zone,
+   to_ts          timestamp without time zone,
+   pgstage_schema name DEFAULT NAME 'pgsql_stage'
+) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   v_old_path      text;
+   v_fdw_extschema text;
+   v_ft_name       text := '__Log_' || schema || '/' || table_name;
+   v_ft            regclass;
+   v_rec           record;
+   v_ins_stmt      text;
+   v_upd_stmt      text;
+   v_del_stmt      text;
+   v_where_clause  text;
+   v_values        text;
+   v_comma_sep     text;
+   v_where_sep     text;
+   v_upd_sep       text;
+   v_colname       text;
+   v_is_pkey       boolean;
+   v_op            text;
+BEGIN
+   /* remember old setting and set search_path */
+   v_old_path := current_setting('search_path');
+
+   EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
+
+   SELECT extnamespace::regnamespace::text INTO v_fdw_extschema
+   FROM pg_extension
+   WHERE extname = 'oracle_fdw';
+
+   SELECT c.oid::regclass INTO v_ft
+   FROM pg_class AS c
+      JOIN pg_namespace AS n ON n.oid = c.relnamespace
+   WHERE n.nspname = pgstage_schema
+     AND c.relname = v_ft_name
+     AND c.relkind = 'f';
+
+   IF NOT FOUND THEN
+      RAISE EXCEPTION '%',
+         format('table %I.%I does not exist', pgstage_schema, v_ft_name);
+   END IF;
+
+   /* generate INSERT, UPDATE and DELETE statements for the table */
+   v_ins_stmt :=
+      format(
+         E'PREPARE ins_stmt(%s) AS\n'
+         'INSERT INTO %I.%I (',
+         v_ft,
+         schema,
+         table_name
+      );
+
+   v_upd_stmt :=
+      format(
+         E'PREPARE upd_stmt(%s) AS\n'
+         'UPDATE %I.%I SET\n   ',
+         v_ft,
+         schema,
+         table_name
+      );
+
+   v_del_stmt :=
+      format(
+         E'PREPARE del_stmt(%s) AS\n'
+         'DELETE FROM %I.%I',
+         v_ft,
+         schema,
+         table_name
+      );
+
+   v_where_clause := E'\nWHERE ';
+   v_values := E')\nVALUES (';
+   v_comma_sep := '';
+   v_where_sep := '';
+   v_upd_sep := '';
+
+   FOR v_colname, v_is_pkey IN
+      SELECT c.column_name,
+             coalesce(k.is_pkey, FALSE)
+      FROM columns AS c
+         LEFT JOIN (SELECT keys.schema,
+                           keys.table_name,
+                           keys.column_name,
+                           TRUE AS is_pkey
+                    FROM keys
+                    WHERE keys.is_primary) AS k
+            USING (schema, table_name, column_name)
+      WHERE c.schema = $1
+        AND c.table_name = $2
+      ORDER BY c.position
+   LOOP
+      v_ins_stmt := v_ins_stmt || v_comma_sep ||
+         quote_ident(v_colname);
+
+      v_values := v_values || v_comma_sep ||
+         format('($1).%I', v_colname);
+
+      v_comma_sep := ', ';
+
+      IF v_is_pkey THEN
+         v_where_clause := v_where_clause || v_where_sep ||
+            format('%I = ($1).%I', v_colname, v_colname);
+
+         v_where_sep := ' AND ';
+      ELSE
+         v_upd_stmt := v_upd_stmt || v_upd_sep ||
+            format('%I = ($1).%I', v_colname, v_colname);
+
+         v_upd_sep := E',\n   ';
+      END IF;
+   END LOOP;
+
+   /* prepare the statements */
+   EXECUTE v_ins_stmt || v_values || ')';
+   EXECUTE v_upd_stmt || v_where_clause;
+   EXECUTE v_del_stmt || v_where_clause;
+
+   /* loop through the changes and apply them */
+   FOR v_rec IN
+      EXECUTE
+         format(
+            E'SELECT * FROM %s\n'
+            'WHERE "__Time" > $1 AND "__Time" <= $2\n'
+            'ORDER BY "__Time"',
+            v_ft
+         )
+      USING from_ts, to_ts
+   LOOP
+      /* get the type of DML operation */
+      EXECUTE
+         format(
+            'SELECT ($1::text::%s)."__Operation"',
+            v_ft
+         )
+         INTO v_op
+         USING v_rec;
+
+      /* call the correct prepared statement */
+      CASE
+         WHEN v_op = 'I' THEN
+            EXECUTE format('EXECUTE ins_stmt(%L)', v_rec);
+         WHEN v_op = 'U' THEN
+            EXECUTE format('EXECUTE upd_stmt(%L)', v_rec);
+         WHEN v_op = 'D' THEN
+            EXECUTE format('EXECUTE del_stmt(%L)', v_rec);
+         ELSE
+            RAISE EXCEPTION 'ora_migrator internal error: unknown DML operation %', v_op;
+      END CASE;
+   END LOOP;
+
+   DEALLOCATE ins_stmt;
+   DEALLOCATE upd_stmt;
+   DEALLOCATE del_stmt;
+
+   /* reset search_path */
+   EXECUTE 'SET LOCAL search_path = ' || v_old_path;
+END;$$;
+
+COMMENT ON FUNCTION oracle_catchup_table(name,name,timestamp without time zone,timestamp without time zone,name) IS
+   'replay data modifications between two timestamps from Oracle to PostgreSQL';
 
 CREATE FUNCTION db_migrator_callback(
    OUT create_metadata_views_fun regprocedure,
