@@ -145,22 +145,36 @@ SELECT message
 FROM oracle_test_table('oracle', 'testschema1', 'baddata')
 ORDER BY message;
 
-/* perform the migration */
+SELECT oracle_migrate_test_data(
+   server => 'oracle',
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+
+/* perform the data migration */
 SELECT db_migrate_mkforeign(
    plugin => 'ora_migrator',
    server => 'oracle',
    options => JSONB '{"max_long": 1024}'
 );
 
-SELECT oracle_migrate_test_data(
-   server => 'oracle',
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
-);
+/* no replication for "baddata" */
+UPDATE pgsql_stage.tables SET
+   migrate = FALSE
+WHERE schema = 'testschema1'
+  AND table_name = 'baddata';
 
+/* set up replication */
 SELECT oracle_replication_start(
    server => 'oracle'
 );
 
+/* but we want to get the migratoin errors for "baddata" */
+UPDATE pgsql_stage.tables SET
+   migrate = TRUE
+WHERE schema = 'testschema1'
+  AND table_name = 'baddata';
+
+/* migrate the rest of the database */
 SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );
@@ -180,6 +194,12 @@ SELECT db_migrate_triggers(
 SELECT db_migrate_views(
    plugin => 'ora_migrator'
 );
+
+/* no replication for "baddata" */
+UPDATE pgsql_stage.tables SET
+   migrate = FALSE
+WHERE schema = 'testschema1'
+  AND table_name = 'baddata';
 
 /* add some test data for replication */
 SELECT oracle_execute(
@@ -215,12 +235,20 @@ SELECT oracle_execute(
 
 /* catch up on Oracle data modifications */
 
-SELECT oracle_catchup_table(
-          'testschema1',
-          'tab1',
-          '2000-01-01 00:00:00',
-          '3000-01-01 00:00:00'
+SELECT oracle_replication_catchup();
+
+/* one more change and a second catch-up */
+
+SELECT oracle_execute(
+          'oracle',
+          E'DELETE FROM tab1 WHERE id = 3'
        );
+
+SELECT oracle_replication_catchup();
+
+/* clean up replication tools */
+
+SELECT oracle_replication_finish('oracle');
 
 /* we have to check the log table before we drop the schema */
 SELECT operation, schema_name, object_name, failed_sql, error_message

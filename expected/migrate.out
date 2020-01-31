@@ -147,7 +147,16 @@ ORDER BY message;
  zero byte in "VALUE1" invalid byte in "VALUE2" 
 (2 rows)
 
-/* perform the migration */
+SELECT oracle_migrate_test_data(
+   server => 'oracle',
+   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
+);
+ oracle_migrate_test_data 
+--------------------------
+                        2
+(1 row)
+
+/* perform the data migration */
 SELECT db_migrate_mkforeign(
    plugin => 'ora_migrator',
    server => 'oracle',
@@ -158,15 +167,12 @@ SELECT db_migrate_mkforeign(
                     0
 (1 row)
 
-SELECT oracle_migrate_test_data(
-   server => 'oracle',
-   only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
-);
- oracle_migrate_test_data 
---------------------------
-                        2
-(1 row)
-
+/* no replication for "baddata" */
+UPDATE pgsql_stage.tables SET
+   migrate = FALSE
+WHERE schema = 'testschema1'
+  AND table_name = 'baddata';
+/* set up replication */
 SELECT oracle_replication_start(
    server => 'oracle'
 );
@@ -175,6 +181,12 @@ SELECT oracle_replication_start(
  
 (1 row)
 
+/* but we want to get the migratoin errors for "baddata" */
+UPDATE pgsql_stage.tables SET
+   migrate = TRUE
+WHERE schema = 'testschema1'
+  AND table_name = 'baddata';
+/* migrate the rest of the database */
 SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );
@@ -219,6 +231,11 @@ SELECT db_migrate_views(
                 0
 (1 row)
 
+/* no replication for "baddata" */
+UPDATE pgsql_stage.tables SET
+   migrate = FALSE
+WHERE schema = 'testschema1'
+  AND table_name = 'baddata';
 /* add some test data for replication */
 SELECT oracle_execute(
           'oracle',
@@ -272,14 +289,32 @@ SELECT oracle_execute(
 (1 row)
 
 /* catch up on Oracle data modifications */
-SELECT oracle_catchup_table(
-          'testschema1',
-          'tab1',
-          '2000-01-01 00:00:00',
-          '3000-01-01 00:00:00'
+SELECT oracle_replication_catchup();
+ oracle_replication_catchup 
+----------------------------
+ 
+(1 row)
+
+/* one more change and a second catch-up */
+SELECT oracle_execute(
+          'oracle',
+          E'DELETE FROM tab1 WHERE id = 3'
        );
- oracle_catchup_table 
-----------------------
+ oracle_execute 
+----------------
+ 
+(1 row)
+
+SELECT oracle_replication_catchup();
+ oracle_replication_catchup 
+----------------------------
+ 
+(1 row)
+
+/* clean up replication tools */
+SELECT oracle_replication_finish('oracle');
+ oracle_replication_finish 
+---------------------------
  
 (1 row)
 

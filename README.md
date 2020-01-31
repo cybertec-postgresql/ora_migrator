@@ -252,8 +252,8 @@ set to `TRUE`, the following objects are created:
 
 ### function `oracle_catchup_table' ###
 
-Copies data that have changed in an Oracle table since the last replication
-catch-up to PostgreSQL.
+Copies data that have changed during a certain time interval from an Oracle
+table to PostgreSQL.
 
 This requires that `oracle_replication_start` has created the required objects
 and that the data migration has finished.
@@ -267,6 +267,54 @@ Parameters:
 - `from_ts`: replicate changes later than that timestamp
 
 - `to_ts`: replicate changes up to and including that timestamp
+
+This is a "low level" function called by `oracle_replication_catchup`; it can
+be used if you want to parallelize catch-up by running it concurrently
+for different tables.
+
+### function `oracle_replication_catchup` ###
+
+Copies all changes in all Oracle tables since the last catch-up to PostgreSQL.
+
+The start timestamp is taken from `__ReplicationStart`, the end from
+`__ReplicationEnd` (which contains the latest safe timestamp).
+After successful completion, the replicaton end time is saved in
+`__ReplicationStart` for the next time.
+
+Parameter:
+
+- `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
+  created by `oracle_migrate_prepare`
+
+You can call this function anytime after `oracle_replication_start` has
+completed.
+
+Unless you have no triggers or foreign key constraints in your database,
+you should set the configuration parameter `session_replication_role` to
+`replica` when calling this function.  Then triggers don't fire, and
+foreign key constraints are not checked.
+
+`oracle_replication_catchup` uses the `SERIALIZABLE` isolation level on
+Oracle, so it sees a fixed snapshot of the Oracle database, and the data
+will be consistent on the PostgreSQL side, even if the Oracle database is
+modified concurrently.
+
+If you want to use replication for near-zero down time migration, call
+it twice in short succession and make sure that there is no data modification
+activity on Oracle during the second call.  Once the second catch-up has
+completed, you can switch the application over to PostgreSQL immediately.
+
+### function `oracle_replication_finish` ###
+
+Removes all objects created by `oracle_replication_start` in PostgreSQL
+and Oracle.
+
+This is used to clean up after you have finished migrating from Oracle.
+
+- `server`: the name of the Oracle foreign server
+
+- `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
+  created by `oracle_migrate_prepare`
 
 Replication
 ===========

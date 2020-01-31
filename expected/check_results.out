@@ -132,8 +132,7 @@ SELECT * FROM testschema1.tab1 ORDER BY id;
 ----+-----------+-------+--------+--------+--------------------------+--------------------------
   1 | some text | 12345 |   3.14 | -2.718 | Fri Jan 26 00:00:00 2018 | Fri Jan 26 22:30:00 2018
   2 |           | 87654 | 9.3452 |        | Fri Dec 29 12:00:00 2017 | 
-  3 | string    |   123 |   3.14 |  2.718 | Wed Apr 01 00:00:00 2020 | Wed Apr 01 08:30:00 2020
-(3 rows)
+(2 rows)
 
 SELECT * FROM testschema1.tab2 ORDER BY id;
  id | tab1_id |      c      |     b      
@@ -147,9 +146,8 @@ SELECT * FROM testschema1.view1 ORDER BY vc, c;
 -----------+-------------
  some text | a long text
  some text | 
- string    | 
            | 
-(4 rows)
+(3 rows)
 
 SELECT * FROM testschema2.tab3 ORDER BY id;
  id | tab2_id |  f  |       ids        

@@ -1376,6 +1376,130 @@ END;$$;
 COMMENT ON FUNCTION oracle_catchup_table(name,name,timestamp without time zone,timestamp without time zone,name) IS
    'replay data modifications between two timestamps from Oracle to PostgreSQL';
 
+CREATE FUNCTION oracle_replication_catchup(
+   pgstage_schema name DEFAULT NAME 'pgsql_stage'
+) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   v_old_path  text;
+   v_extschema text;
+   v_tabschema name;
+   v_tabname   name;
+   v_from      timestamp without time zone;
+   v_to        timestamp without time zone;
+BEGIN
+   /* remember old setting and set search_path */
+   v_old_path := current_setting('search_path');
+
+   EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
+
+   SELECT extnamespace::regnamespace::text INTO v_extschema
+   FROM pg_extension
+   WHERE extname = 'ora_migrator';
+
+   /* get the "from" timestamp from the last saved timestamp */
+   SELECT ts INTO v_from
+   FROM "__ReplicationStart";
+
+   /* get the "to" timestamp from the oldest Oracle transaction */
+   SELECT ts INTO v_to
+   FROM "__ReplicationEnd";
+
+   FOR v_tabschema, v_tabname IN
+      SELECT s.schema, t.table_name
+      FROM schemas AS s
+         JOIN tables AS t USING (schema)
+      WHERE t.migrate
+   LOOP
+      /* catch up on a single table */
+      EXECUTE
+         format(
+            'SELECT %I.oracle_catchup_table($1, $2, $3, $4)',
+            v_extschema
+         )
+      USING v_tabschema, v_tabname, v_from, v_to;
+   END LOOP;
+
+   /* save the "to" timestamp as new "from" timestamp */
+   UPDATE "__ReplicationStart"
+   SET ts = v_to;
+
+   /* reset search_path */
+   EXECUTE 'SET LOCAL search_path = ' || v_old_path;
+END;$$;
+
+COMMENT ON FUNCTION oracle_replication_catchup(name) IS
+   'replay data modifications for all tables from Oracle to PostgreSQL';
+
+CREATE FUNCTION oracle_replication_finish(
+   server         name,
+   pgstage_schema name DEFAULT NAME 'pgsql_stage'
+) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS
+$$DECLARE
+   v_old_path        text;
+   v_fdw_extschema   text;
+   v_tabname         text;
+   v_tabschema       text;
+   v_orig_schema     text;
+   v_orig_table      text;
+BEGIN
+   /* remember old setting and set search_path */
+   v_old_path := current_setting('search_path');
+
+   EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
+
+   SELECT extnamespace::regnamespace::text INTO v_fdw_extschema
+   FROM pg_extension
+   WHERE extname = 'oracle_fdw';
+
+   /* drop the replication timestamp tables */
+   DROP TABLE "__ReplicationStart";
+   DROP FOREIGN TABLE "__ReplicationEnd";
+
+   FOR v_tabschema, v_orig_schema, v_tabname, v_orig_table IN
+      SELECT s.schema, s.orig_schema, t.table_name, t.orig_table
+      FROM schemas AS s
+         JOIN tables AS t USING (schema)
+      WHERE t.migrate
+   LOOP
+      /* drop the foreign table for the Oracle log table */
+      EXECUTE
+         format(
+            'DROP FOREIGN TABLE %I',
+            '__Log_' || v_tabschema || '/' || v_tabname
+         );
+      /* drop then Oracle trigger */
+      EXECUTE
+         format(
+            'SELECT %I.oracle_execute (%L, %L)',
+            v_fdw_extschema,
+            server,
+            format(
+               'DROP TRIGGER "%s"."__Log_%s_TRIG"',
+               v_orig_schema,
+               v_orig_table
+            )
+         );
+      /* drop then Oracle log table */
+      EXECUTE
+         format(
+            'SELECT %I.oracle_execute (%L, %L)',
+            v_fdw_extschema,
+            server,
+            format(
+               'DROP TABLE "%s"."__Log_%s" PURGE',
+               v_orig_schema,
+               v_orig_table
+            )
+         );
+   END LOOP;
+
+   /* reset search_path */
+   EXECUTE 'SET LOCAL search_path = ' || v_old_path;
+END;$$;
+
+COMMENT ON FUNCTION oracle_replication_finish(name,name) IS
+   'destroy all objects that were used for migration';
+
 CREATE FUNCTION db_migrator_callback(
    OUT create_metadata_views_fun regprocedure,
    OUT translate_datatype_fun    regprocedure,
