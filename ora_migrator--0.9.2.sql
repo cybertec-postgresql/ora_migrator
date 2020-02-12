@@ -734,6 +734,7 @@ CREATE FUNCTION oracle_mkforeign(
    orig_schema    text,
    orig_table     text,
    column_names   name[],
+   column_options jsonb[],
    orig_columns   text[],
    data_types     text[],
    nullable       boolean[],
@@ -741,15 +742,24 @@ CREATE FUNCTION oracle_mkforeign(
 ) RETURNS text
    LANGUAGE plpgsql IMMUTABLE CALLED ON NULL INPUT AS
 $$DECLARE
-   stmt text;
-   i    integer;
-   sep  text := '';
+   stmt       text;
+   i          integer;
+   sep        text := '';
+   colopt_str text;
 BEGIN
    stmt := format(E'CREATE FOREIGN TABLE %I.%I (', schema, table_name);
 
    FOR i IN 1..cardinality(column_names) LOOP
-      stmt := stmt || format(E'%s\n   %I %s%s',
+      /* format the column options as string */
+      SELECT ' OPTIONS (' ||
+             string_agg(format('%I %L', j.key, j.value->>0), ', ') ||
+             ')'
+         INTO colopt_str
+      FROM jsonb_each(column_options[i]) AS j;
+
+      stmt := stmt || format(E'%s\n   %I %s%s%s',
                          sep, column_names[i], data_types[i],
+                         coalesce(colopt_str, ''),
                          CASE WHEN nullable[i] THEN '' ELSE ' NOT NULL' END
                       );
       sep := ',';
@@ -766,7 +776,7 @@ BEGIN
                   );
 END;$$;
 
-COMMENT ON FUNCTION oracle_mkforeign(name,name,name,text,text,name[],text[],text[],boolean[],jsonb) IS
+COMMENT ON FUNCTION oracle_mkforeign(name,name,name,text,text,name[],jsonb[],text[],text[],boolean[],jsonb) IS
    'construct a CREATE FOREIGN TABLE statement based on the input data';
 
 CREATE FUNCTION oracle_test_table(
@@ -1517,7 +1527,7 @@ SELECT format('%I.%I(name,name,jsonb)', ext.schema_name, 'create_oraviews')::reg
        format('%I.%I(text,integer,integer,integer)', ext.schema_name, 'oracle_translate_datatype')::regprocedure,
        format('%I.%I(text)', ext.schema_name, 'oracle_tolower')::regprocedure,
        format('%I.%I(text)', ext.schema_name, 'oracle_translate_expression')::regprocedure,
-       format('%I.%I(name,name,name,text,text,name[],text[],text[],boolean[],jsonb)', ext.schema_name, 'oracle_mkforeign')::regprocedure
+       format('%I.%I(name,name,name,text,text,name[],jsonb[],text[],text[],boolean[],jsonb)', ext.schema_name, 'oracle_mkforeign')::regprocedure
 FROM ext$$;
 
 COMMENT ON FUNCTION db_migrator_callback() IS

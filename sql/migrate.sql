@@ -150,6 +150,13 @@ SELECT oracle_migrate_test_data(
    only_schemas => ARRAY['TESTSCHEMA1', 'TESTSCHEMA2']
 );
 
+/* strip zero bytes from "baddata" (will still fail) */
+UPDATE pgsql_stage.columns
+SET options = JSONB '{"strip_zeros": "true"}'
+WHERE schema = 'testschema1'
+  AND table_name = 'baddata'
+  AND column_name = 'value1';
+
 /* perform the data migration */
 SELECT db_migrate_mkforeign(
    plugin => 'ora_migrator',

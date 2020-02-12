@@ -156,6 +156,12 @@ SELECT oracle_migrate_test_data(
                         2
 (1 row)
 
+/* strip zero bytes from "baddata" (will still fail) */
+UPDATE pgsql_stage.columns
+SET options = JSONB '{"strip_zeros": "true"}'
+WHERE schema = 'testschema1'
+  AND table_name = 'baddata'
+  AND column_name = 'value1';
 /* perform the data migration */
 SELECT db_migrate_mkforeign(
    plugin => 'ora_migrator',
@@ -191,7 +197,7 @@ SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );
 WARNING:  Error loading table data for testschema1.baddata
-DETAIL:  invalid byte sequence for encoding "UTF8": 0x00: 
+DETAIL:  invalid byte sequence for encoding "UTF8": 0xf6 0x6e 0x20 0x6b: 
  db_migrate_tables 
 -------------------
                  1
@@ -322,9 +328,9 @@ SELECT oracle_replication_finish('oracle');
 SELECT operation, schema_name, object_name, failed_sql, error_message
 FROM pgsql_stage.migrate_log
 ORDER BY log_time;
-     operation     | schema_name | object_name |                                       failed_sql                                        |                   error_message                   
--------------------+-------------+-------------+-----------------------------------------------------------------------------------------+---------------------------------------------------
- copy table data   | testschema1 | baddata     | INSERT INTO testschema1.baddata SELECT * FROM testschema1."baddata\x07"                 | invalid byte sequence for encoding "UTF8": 0x00: 
+     operation     | schema_name | object_name |                                       failed_sql                                        |                          error_message                           
+-------------------+-------------+-------------+-----------------------------------------------------------------------------------------+------------------------------------------------------------------
+ copy table data   | testschema1 | baddata     | INSERT INTO testschema1.baddata SELECT * FROM testschema1."baddata\x07"                 | invalid byte sequence for encoding "UTF8": 0xf6 0x6e 0x20 0x6b: 
  unique constraint | testschema1 | baddata     | ALTER TABLE testschema1.baddata ADD PRIMARY KEY (id) NOT DEFERRABLE INITIALLY IMMEDIATE | relation "testschema1.baddata" does not exist: 
 (2 rows)
 
