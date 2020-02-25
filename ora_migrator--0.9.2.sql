@@ -70,7 +70,7 @@ $$DECLARE
          '       CASE WHEN col.data_type_owner IS NULL\n'
          '            THEN col.data_type\n'
          '            ELSE col.data_type_owner || ''''.'''' || col.data_type\n'
-         '       END,\n'
+         '       END data_type,\n'
          '       col.char_length,\n'
          '       col.data_precision,\n'
          '       col.data_scale,\n'
