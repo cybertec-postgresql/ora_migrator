@@ -431,7 +431,6 @@ $$DECLARE
          '  AND (owner, table_name)\n'
          '     NOT IN (SELECT log_owner, log_table\n'
          '             FROM dba_mview_logs)\n'
-         '  AND p.type = ''''TABLE''''\n'
          '  AND owner NOT IN (' || sys_schemas || E')\n'
          '  AND p.grantor NOT IN (' || sys_schemas || E')\n'
          '  AND p.grantee NOT IN (' || sys_schemas || E')'
