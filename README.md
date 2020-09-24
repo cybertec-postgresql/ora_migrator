@@ -17,6 +17,16 @@ migration from Oracle.  See [Replication](#replication) for details.
  [migrator]: https://github.com/cybertec-postgresql/db_migrator
  [fdw]: http://laurenz.github.io/oracle_fdw/
 
+Options
+=======
+
+The following option can be used for `db_migrate_prepare`,
+`db_migrate_mkforeign` and `db_migrate`:
+
+- `max_long` (integer, default value 32767): will be used to set the
+  `max_long` option on the foreign tables.  This determines the maximal
+  length of LONG, LONG RAW and XMLTYPE columns.
+
 Prerequisites
 =============
 
