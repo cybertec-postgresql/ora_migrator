@@ -698,7 +698,7 @@ $$DECLARE
    v_geom_type text;
 BEGIN
    /* get the postgis geometry type if it exists */
-   SELECT quote_ident(extnamespace::regnamespace::text) || '.geometry' INTO v_geom_type
+   SELECT extnamespace::regnamespace::text || '.geometry' INTO v_geom_type
       FROM pg_catalog.pg_extension
       WHERE extname = 'postgis';
    IF v_geom_type IS NULL THEN v_geom_type := 'text'; END IF;
@@ -964,10 +964,10 @@ $$DECLARE
    v_result  bigint;
 BEGIN
    /* set "search_path" to the FDW staging schema and the extension schema */
-   SELECT extnamespace::regnamespace INTO extschema
+   SELECT extnamespace::regnamespace::text INTO extschema
       FROM pg_catalog.pg_extension
       WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I, %I', pgstage_schema, extschema);
+   EXECUTE format('SET LOCAL search_path = %I, %s', pgstage_schema, extschema);
 
    /* translate schema names to lower case */
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
@@ -1166,7 +1166,7 @@ BEGIN
       /* create Oracle log table */
       EXECUTE
          format(
-            E'SELECT %I.oracle_execute(%L,\n%L\n)',
+            E'SELECT %s.oracle_execute(%L,\n%L\n)',
             v_fdw_extschema,
             server,
             v_create_logtable ||
@@ -1179,7 +1179,7 @@ BEGIN
       /* create Oracle trigger */
       EXECUTE
          format(
-            E'SELECT %I.oracle_execute(%L,\n%L\n)',
+            E'SELECT %s.oracle_execute(%L,\n%L\n)',
             v_fdw_extschema,
             server,
             format(
@@ -1445,7 +1445,7 @@ BEGIN
       /* catch up on a single table */
       EXECUTE
          format(
-            'SELECT %I.oracle_catchup_table($1, $2, $3, $4)',
+            'SELECT %s.oracle_catchup_table($1, $2, $3, $4)',
             v_extschema
          )
       USING v_tabschema, v_tabname, v_from, v_to;
@@ -1502,7 +1502,7 @@ BEGIN
       /* drop then Oracle trigger */
       EXECUTE
          format(
-            'SELECT %I.oracle_execute (%L, %L)',
+            'SELECT %s.oracle_execute (%L, %L)',
             v_fdw_extschema,
             server,
             format(
@@ -1514,7 +1514,7 @@ BEGIN
       /* drop then Oracle log table */
       EXECUTE
          format(
-            'SELECT %I.oracle_execute (%L, %L)',
+            'SELECT %s.oracle_execute (%L, %L)',
             v_fdw_extschema,
             server,
             format(
@@ -1545,11 +1545,11 @@ $$WITH ext AS (
    FROM pg_extension
    WHERE extname = 'ora_migrator'
 )
-SELECT format('%I.%I(name,name,jsonb)', ext.schema_name, 'create_oraviews')::regprocedure,
-       format('%I.%I(text,integer,integer,integer)', ext.schema_name, 'oracle_translate_datatype')::regprocedure,
-       format('%I.%I(text)', ext.schema_name, 'oracle_tolower')::regprocedure,
-       format('%I.%I(text)', ext.schema_name, 'oracle_translate_expression')::regprocedure,
-       format('%I.%I(name,name,name,text,text,name[],jsonb[],text[],text[],boolean[],jsonb)', ext.schema_name, 'oracle_mkforeign')::regprocedure
+SELECT format('%s.%I(name,name,jsonb)', ext.schema_name, 'create_oraviews')::regprocedure,
+       format('%s.%I(text,integer,integer,integer)', ext.schema_name, 'oracle_translate_datatype')::regprocedure,
+       format('%s.%I(text)', ext.schema_name, 'oracle_tolower')::regprocedure,
+       format('%s.%I(text)', ext.schema_name, 'oracle_translate_expression')::regprocedure,
+       format('%s.%I(name,name,name,text,text,name[],jsonb[],text[],text[],boolean[],jsonb)', ext.schema_name, 'oracle_mkforeign')::regprocedure
 FROM ext$$;
 
 COMMENT ON FUNCTION db_migrator_callback() IS
