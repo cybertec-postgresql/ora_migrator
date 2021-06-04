@@ -291,12 +291,16 @@ $$DECLARE
          '  AND ic.table_name      = ie.table_name(+)\n'
          '  AND ic.column_position = ie.column_position(+)\n'
          '  AND i.index_type NOT IN (''''LOB'''', ''''DOMAIN'''')\n'
-         '  AND NOT EXISTS (SELECT 1\n'
+         '  AND NOT EXISTS (SELECT 1  /* exclude constraint indexes */\n'
          '                  FROM dba_constraints c\n'
          '                  WHERE c.owner = i.table_owner\n'
          '                    AND c.table_name = i.table_name\n'
          '                    AND COALESCE(c.index_owner, i.owner) = i.owner\n'
          '                    AND c.index_name = i.index_name)\n'
+         '  AND NOT EXISTS (SELECT 1  /* exclude materialized views */\n'
+         '                  FROM dba_mviews m\n'
+         '                  WHERE m.owner = i.table_owner\n'
+         '                    AND m.mview_name = i.table_name)\n'
          '  AND ic.table_owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
