@@ -13,6 +13,10 @@ In addition to that, `ora_migrator` offers a replication functionality
 from Oracle to PostgreSQL which can be used for almost zero down time
 migration from Oracle.  See [Replication](#replication) for details.
 
+Note that since schema names are usually in upper case in Oracle,
+you will need to use upper case schema names for the `only_schemas`
+parameter of the `db_migrator` functions.
+
 
  [migrator]: https://github.com/cybertec-postgresql/db_migrator
  [fdw]: http://laurenz.github.io/oracle_fdw/
