@@ -19,11 +19,11 @@ SET client_min_messages = WARNING;
 Indexes:
     "log_pkey" PRIMARY KEY, btree (logts, username)
 
-            Index "testschema1.log_pkey"
-  Column  |            Type             | Definition 
-----------+-----------------------------+------------
- logts    | timestamp(6) with time zone | logts
- username | character varying(128)      | username
+                Index "testschema1.log_pkey"
+  Column  |            Type             | Key? | Definition 
+----------+-----------------------------+------+------------
+ logts    | timestamp(6) with time zone | yes  | logts
+ username | character varying(128)      | yes  | username
 primary key, btree, for table "testschema1.log"
 
                          Sequence "testschema1.seq1"
@@ -31,11 +31,11 @@ primary key, btree, for table "testschema1.log"
 --------+-------+---------+---------------------+-----------+---------+-------
  bigint |     2 |       1 | 9223372036854775807 |         5 | no      |    10
 
-                                    Table "testschema1.tab1"
- Column |              Type              | Collation | Nullable |            Default            
---------+--------------------------------+-----------+----------+-------------------------------
+                                     Table "testschema1.tab1"
+ Column |              Type              | Collation | Nullable |             Default             
+--------+--------------------------------+-----------+----------+---------------------------------
  id     | integer                        |           | not null | 
- vc     | character varying(30)          |           |          | ('AT '::text || CURRENT_DATE)
+ vc     | character varying(30)          |           |          | (('AT '::text || CURRENT_DATE))
  n      | bigint                         |           | not null | 
  bf     | real                           |           |          | 
  bd     | double precision               |           |          | 
@@ -43,32 +43,32 @@ primary key, btree, for table "testschema1.log"
  ts     | timestamp(6) without time zone |           |          | 
 Indexes:
     "tab1_pkey" PRIMARY KEY, btree (id)
-    "tab1_bf_bd_idx" btree (bf, bd DESC)
-    "tab1_date_part_idx" btree (date_part('day'::text, d))
+    "tab1_bf_bd_ind" btree (bf, bd DESC)
+    "tab1_d_exp_ind" btree (EXTRACT(day FROM d))
 Check constraints:
     "tab1_bf_check" CHECK (bf > 0::double precision)
 Referenced by:
-    TABLE "testschema1.tab2" CONSTRAINT "tab2_tab1_id_fkey" FOREIGN KEY (tab1_id) REFERENCES testschema1.tab1(id)
+    TABLE "testschema1.tab2" CONSTRAINT "tab2_fkey" FOREIGN KEY (tab1_id) REFERENCES testschema1.tab1(id)
 Triggers:
-    tab1_trig BEFORE INSERT OR UPDATE ON testschema1.tab1 FOR EACH ROW EXECUTE PROCEDURE testschema1.tab1_trig()
+    tab1_trig BEFORE INSERT OR UPDATE ON testschema1.tab1 FOR EACH ROW EXECUTE FUNCTION testschema1.tab1_trig()
 
-   Index "testschema1.tab1_bf_bd_idx"
- Column |       Type       | Definition 
---------+------------------+------------
- bf     | real             | bf
- bd     | double precision | bd
+      Index "testschema1.tab1_bf_bd_ind"
+ Column |       Type       | Key? | Definition 
+--------+------------------+------+------------
+ bf     | real             | yes  | bf
+ bd     | double precision | yes  | bd
 btree, for table "testschema1.tab1"
 
-          Index "testschema1.tab1_date_part_idx"
-  Column   |       Type       |        Definition         
------------+------------------+---------------------------
- date_part | double precision | date_part('day'::text, d)
+       Index "testschema1.tab1_d_exp_ind"
+ Column  |  Type   | Key? |     Definition      
+---------+---------+------+---------------------
+ extract | numeric | yes  | EXTRACT(day FROM d)
 btree, for table "testschema1.tab1"
 
- Index "testschema1.tab1_pkey"
- Column |  Type   | Definition 
---------+---------+------------
- id     | integer | id
+    Index "testschema1.tab1_pkey"
+ Column |  Type   | Key? | Definition 
+--------+---------+------+------------
+ id     | integer | yes  | id
 primary key, btree, for table "testschema1.tab1"
 
               Table "testschema1.tab2"
@@ -81,14 +81,14 @@ primary key, btree, for table "testschema1.tab1"
 Indexes:
     "tab2_pkey" PRIMARY KEY, btree (id)
 Foreign-key constraints:
-    "tab2_tab1_id_fkey" FOREIGN KEY (tab1_id) REFERENCES testschema1.tab1(id)
+    "tab2_fkey" FOREIGN KEY (tab1_id) REFERENCES testschema1.tab1(id)
 Referenced by:
-    TABLE "testschema2.tab3" CONSTRAINT "tab3_tab2_id_fkey" FOREIGN KEY (tab2_id) REFERENCES testschema1.tab2(id) ON DELETE CASCADE
+    TABLE "testschema2.tab3" CONSTRAINT "tab3_fkey" FOREIGN KEY (tab2_id) REFERENCES testschema1.tab2(id) ON DELETE CASCADE
 
- Index "testschema1.tab2_pkey"
- Column |  Type   | Definition 
---------+---------+------------
- id     | integer | id
+    Index "testschema1.tab2_pkey"
+ Column |  Type   | Key? | Definition 
+--------+---------+------+------------
+ id     | integer | yes  | id
 primary key, btree, for table "testschema1.tab2"
 
                     View "testschema1.view1"
@@ -108,12 +108,12 @@ primary key, btree, for table "testschema1.tab2"
 Indexes:
     "tab3_pkey" PRIMARY KEY, btree (id)
 Foreign-key constraints:
-    "tab3_tab2_id_fkey" FOREIGN KEY (tab2_id) REFERENCES testschema1.tab2(id) ON DELETE CASCADE
+    "tab3_fkey" FOREIGN KEY (tab2_id) REFERENCES testschema1.tab2(id) ON DELETE CASCADE
 
- Index "testschema2.tab3_pkey"
- Column |  Type   | Definition 
---------+---------+------------
- id     | integer | id
+    Index "testschema2.tab3_pkey"
+ Column |  Type   | Key? | Definition 
+--------+---------+------+------------
+ id     | integer | yes  | id
 primary key, btree, for table "testschema2.tab3"
 
 /* more version independent than \df */

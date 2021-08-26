@@ -197,7 +197,7 @@ SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );
 WARNING:  Error loading table data for testschema1.baddata
-DETAIL:  invalid byte sequence for encoding "UTF8": 0xf6 0x6e 0x20 0x6b: 
+DETAIL:  invalid byte sequence for encoding "UTF8": 0x00: 
  db_migrate_tables 
 -------------------
                  1
@@ -328,10 +328,10 @@ SELECT oracle_replication_finish('oracle');
 SELECT operation, schema_name, object_name, failed_sql, error_message
 FROM pgsql_stage.migrate_log
 ORDER BY log_time;
-     operation     | schema_name | object_name |                                       failed_sql                                        |                          error_message                           
--------------------+-------------+-------------+-----------------------------------------------------------------------------------------+------------------------------------------------------------------
- copy table data   | testschema1 | baddata     | INSERT INTO testschema1.baddata SELECT * FROM testschema1."baddata\x07"                 | invalid byte sequence for encoding "UTF8": 0xf6 0x6e 0x20 0x6b: 
- unique constraint | testschema1 | baddata     | ALTER TABLE testschema1.baddata ADD PRIMARY KEY (id) NOT DEFERRABLE INITIALLY IMMEDIATE | relation "testschema1.baddata" does not exist: 
+     operation     | schema_name | object_name |                                                   failed_sql                                                    |                   error_message                   
+-------------------+-------------+-------------+-----------------------------------------------------------------------------------------------------------------+---------------------------------------------------
+ copy table data   | testschema1 | baddata     | INSERT INTO testschema1.baddata SELECT * FROM testschema1."baddata\x07"                                         | invalid byte sequence for encoding "UTF8": 0x00: 
+ unique constraint | testschema1 | baddata     | ALTER TABLE testschema1.baddata ADD CONSTRAINT baddata_pkey PRIMARY KEY (id) NOT DEFERRABLE INITIALLY IMMEDIATE | relation "testschema1.baddata" does not exist: 
 (2 rows)
 
 SELECT db_migrate_finish();
