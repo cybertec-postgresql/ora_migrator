@@ -291,6 +291,7 @@ $$DECLARE
          '  AND ic.table_name      = ie.table_name(+)\n'
          '  AND ic.column_position = ie.column_position(+)\n'
          '  AND i.index_type NOT IN (''''LOB'''', ''''DOMAIN'''')\n'
+         '  AND coalesce(i.dropped, ''''NO'''') = ''''NO''''\n'
          '  AND NOT EXISTS (SELECT 1  /* exclude constraint indexes */\n'
          '                  FROM dba_constraints c\n'
          '                  WHERE c.owner = i.table_owner\n'
@@ -305,6 +306,11 @@ $$DECLARE
          '                  FROM dba_mview_logs ml\n'
          '                  WHERE ml.log_owner = i.table_owner\n'
          '                    AND ml.log_table = i.table_name)\n'
+         '  AND NOT EXISTS (SELECT 1  /* exclude temporary tables */\n'
+         '                  FROM dba_tables t\n'
+         '                  WHERE t.owner = i.table_owner\n'
+         '                    AND t.table_name = i.table_name\n'
+         '                    AND t.temporary = ''''Y'''')\n'
          '  AND ic.table_owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
@@ -432,7 +438,7 @@ $$DECLARE
          'WHERE t.temporary = ''''N''''\n'
          '  AND t.secondary = ''''N''''\n'
          '  AND t.nested    = ''''NO''''\n'
-         '  AND t.dropped   = ''''NO''''\n'
+         '  AND coalesce(t.dropped, ''''NO'''') = ''''NO''''\n'
          '  AND (owner, table_name)\n'
          '     NOT IN (SELECT owner, mview_name\n'
          '             FROM dba_mviews)\n'
