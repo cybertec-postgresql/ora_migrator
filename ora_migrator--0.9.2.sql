@@ -1282,6 +1282,7 @@ $$DECLARE
    v_upd_sep       text;
    v_colname       text;
    v_is_pkey       boolean;
+   v_has_pkey      boolean := FALSE;
    v_op            text;
 BEGIN
    /* remember old setting and set search_path */
@@ -1354,6 +1355,9 @@ BEGIN
         AND c.table_name = $2
       ORDER BY c.position
    LOOP
+      /* "v_has_pkey" will end up TRUE if there is a primary key column */
+      v_has_pkey := v_has_pkey OR v_is_pkey;
+
       v_ins_stmt := v_ins_stmt || v_comma_sep ||
          quote_ident(v_colname);
 
@@ -1375,6 +1379,12 @@ BEGIN
 
       v_upd_sep := E',\n   ';
    END LOOP;
+
+   IF NOT v_has_pkey THEN
+      RAISE EXCEPTION '%',
+         format('cannot catch up for table %I.%I since it has no primary key',
+                schema, table_name);
+   END IF;
 
    /* prepare the statements */
    EXECUTE v_ins_stmt || v_values || ')';
