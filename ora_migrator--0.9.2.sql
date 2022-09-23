@@ -1367,12 +1367,13 @@ BEGIN
             format('%I = ($1).%I', v_colname, v_colname);
 
          v_where_sep := ' AND ';
-      ELSE
-         v_upd_stmt := v_upd_stmt || v_upd_sep ||
-            format('%I = ($1).%I', v_colname, v_colname);
-
-         v_upd_sep := E',\n   ';
       END IF;
+
+      /* Have a SET clause for all columns, even the primary key */
+      v_upd_stmt := v_upd_stmt || v_upd_sep ||
+         format('%I = ($1).%I', v_colname, v_colname);
+
+      v_upd_sep := E',\n   ';
    END LOOP;
 
    /* prepare the statements */
