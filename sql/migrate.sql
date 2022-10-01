@@ -175,7 +175,7 @@ SELECT oracle_replication_start(
    server => 'oracle'
 );
 
-/* but we want to get the migratoin errors for "baddata" */
+/* but we want to get the migration errors for "baddata" */
 UPDATE pgsql_stage.tables SET
    migrate = TRUE
 WHERE schema = 'testschema1'
