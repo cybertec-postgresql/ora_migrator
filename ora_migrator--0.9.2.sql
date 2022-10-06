@@ -688,14 +688,29 @@ CREATE FUNCTION oracle_translate_expression(s text) RETURNS text
 $$DECLARE
    r text;
 BEGIN
+   /* translate identifiers to lower case */
    FOR r IN
       SELECT idents[1]
       FROM regexp_matches(s, '"([^"]*)"', 'g') AS idents
    LOOP
       s := replace(s, '"' || r || '"', '"' || oracle_tolower(r) || '"' );
    END LOOP;
+   /*
+    * Replace SYSDATE and SYSTIMESTAMP.
+    * For the latter, "clock_timestamp()" would be more accurate, but
+    * I think that "current_timestamp" is usually preferable.  This is
+    * perhaps an unfounded personal opinion, but this function lays no
+    * claim for completeness and total accuracy anyway.
+    */
    s := regexp_replace(s, '\msysdate\M', 'current_date', 'gi');
    s := regexp_replace(s, '\msystimestamp\M', 'current_timestamp', 'gi');
+   /*
+    * Translate NEXTVAL from a pseudo-column to a function call.
+    * We don't have to worry about a double quote in an identifier,
+    * because Oracle doesn't support that anyway.
+    */
+   s := regexp_replace(s, '"([^"]*)"\."([^"]*)"\."nextval"',
+                          'nextval(''"\1"."\2"'')', 'gi');
 
    RETURN s;
 END;$$;
