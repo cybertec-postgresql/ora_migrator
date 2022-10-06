@@ -696,6 +696,7 @@ BEGIN
    END LOOP;
    s := regexp_replace(s, '\msysdate\M', 'current_date', 'gi');
    s := regexp_replace(s, '\msystimestamp\M', 'current_timestamp', 'gi');
+   s := regexp_replace(s, '"(\w[[:alnum:]$_#]*)"\."(\w[[:alnum:]$_#]*)"\."nextval"', 'nextval(''\1.\2'')', 'gi');
 
    RETURN s;
 END;$$;
