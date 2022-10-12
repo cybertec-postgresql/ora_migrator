@@ -1283,7 +1283,6 @@ CREATE FUNCTION oracle_catchup_table(
 ) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS
 $$DECLARE
    v_old_path      text;
-   v_fdw_extschema text;
    v_ft_name       text := '__Log_' || schema || '/' || table_name;
    v_ft            regclass;
    v_rec           record;
@@ -1304,10 +1303,6 @@ BEGIN
    v_old_path := current_setting('search_path');
 
    EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
-
-   SELECT extnamespace::regnamespace::text INTO v_fdw_extschema
-   FROM pg_extension
-   WHERE extname = 'oracle_fdw';
 
    SELECT c.oid::regclass INTO v_ft
    FROM pg_class AS c
