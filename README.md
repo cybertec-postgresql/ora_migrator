@@ -297,6 +297,8 @@ After successful completion, the replicaton end time is saved in
 
 Parameter:
 
+- `staging_schema` (default `fdw_stage`): name of the remote staging schema
+
 - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
   created by `oracle_migrate_prepare`
 

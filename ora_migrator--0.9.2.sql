@@ -1450,7 +1450,41 @@ END;$$;
 COMMENT ON FUNCTION oracle_catchup_table(name,name,timestamp without time zone,timestamp without time zone,name) IS
    'replay data modifications between two timestamps from Oracle to PostgreSQL';
 
+CREATE FUNCTION oracle_catchup_sequence(
+   schema         name,
+   sequence_name  name,
+   staging_schema name DEFAULT NAME 'fdw_stage'
+) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS $$
+DECLARE
+   v_fdw_extschema text;
+   v_last_value    bigint;
+BEGIN
+
+   SELECT extnamespace::regnamespace::text INTO v_fdw_extschema
+   FROM pg_extension
+   WHERE extname = 'oracle_fdw';
+
+   EXECUTE format(
+      E'SELECT last_value\n'
+      'FROM %1$I.sequences \n'
+      'WHERE %2$I.oracle_tolower(schema) = %3$L\n'
+      '  AND %2$I.oracle_tolower(sequence_name) = %4$L',
+      staging_schema, v_fdw_extschema, schema, sequence_name
+   )
+   INTO v_last_value;
+
+   EXECUTE format(
+      'SELECT setval(''%I.%I'', %L)',
+      schema, sequence_name, v_last_value
+   );
+
+END;$$;
+
+COMMENT ON FUNCTION oracle_catchup_sequence(name,name,name) IS
+   'replay sequences modifications from Oracle to PostgreSQL';
+
 CREATE FUNCTION oracle_replication_catchup(
+   staging_schema name DEFAULT NAME 'fdw_stage',
    pgstage_schema name DEFAULT NAME 'pgsql_stage'
 ) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS
 $$DECLARE
@@ -1460,6 +1494,8 @@ $$DECLARE
    v_tabname   name;
    v_from      timestamp without time zone;
    v_to        timestamp without time zone;
+   v_seqschema name;
+   v_seqname   name;
 BEGIN
    /* remember old setting and set search_path */
    v_old_path := current_setting('search_path');
@@ -1497,11 +1533,24 @@ BEGIN
    UPDATE "__ReplicationStart"
    SET ts = v_to;
 
+   FOR v_seqschema, v_seqname IN
+      SELECT schema, sequence_name
+      FROM sequences
+   LOOP
+      /* catch up on a single sequence */
+      EXECUTE
+         format(
+            'SELECT %s.oracle_catchup_sequence($1, $2, $3)',
+            v_extschema
+         )
+      USING v_seqschema, v_seqname, staging_schema;
+   END LOOP;
+
    /* reset search_path */
    EXECUTE 'SET LOCAL search_path = ' || v_old_path;
 END;$$;
 
-COMMENT ON FUNCTION oracle_replication_catchup(name) IS
+COMMENT ON FUNCTION oracle_replication_catchup(name,name) IS
    'replay data modifications for all tables from Oracle to PostgreSQL';
 
 CREATE FUNCTION oracle_replication_finish(
