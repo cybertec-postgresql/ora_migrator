@@ -264,7 +264,7 @@ set to `TRUE`, the following objects are created:
 - a PostgreSQL foreign table `__Log_<schema>/<tablename>` for the Oracle change
   log table
 
-### function `oracle_catchup_table' ###
+### function `oracle_catchup_table` ###
 
 Copies data that have changed during a certain time interval from an Oracle
 table to PostgreSQL.
@@ -286,16 +286,30 @@ This is a "low level" function called by `oracle_replication_catchup`; it can
 be used if you want to parallelize catch-up by running it concurrently
 for different tables.
 
+### function `oracle_catchup_sequence` ###
+
+Parameters:
+
+- `schema`: the schema of the migrated sequence
+
+- `sequence_name`: the name of the migrated sequence
+
+- `staging_schema` (default `fdw_stage`): name of the remote staging schema
+
+Queries the current value of the Oracle sequence on the remote side and sets
+the migrated sequence to that value.
+
 ### function `oracle_replication_catchup` ###
 
-Copies all changes in all Oracle tables since the last catch-up to PostgreSQL.
+Copies all changes in all Oracle tables and sequences since the last catch-up
+to PostgreSQL.
 
 The start timestamp is taken from `__ReplicationStart`, the end from
 `__ReplicationEnd` (which contains the latest safe timestamp).
 After successful completion, the replicaton end time is saved in
 `__ReplicationStart` for the next time.
 
-Parameter:
+Parameters:
 
 - `staging_schema` (default `fdw_stage`): name of the remote staging schema
 
