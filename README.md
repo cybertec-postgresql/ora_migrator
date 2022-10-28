@@ -77,8 +77,8 @@ Prerequisites
 
   To use replication for tables not owned by the Oracle user, the user must
   have the `CREATE ANY TABLE`, `CREATE ANY INDEX`, `CREATE ANY TRIGGER`,
-  `DROP ANY TABLE` and `SELECT ANY TABLE` privilege (this is required to
-  create and drop logging tables and triggers).
+  `DROP ANY TABLE`, `DROP ANY TRIGGER` and `SELECT ANY TABLE` privilege (this
+  is required to create and drop logging tables and triggers).
 
 Installation
 ============
