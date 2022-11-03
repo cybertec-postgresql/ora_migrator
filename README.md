@@ -403,6 +403,36 @@ The procedure is as follows:
 
 - Finally, call `db_migrate_finish` to drop all auxiliary objects.
 
+Running the regression tests
+============================
+
+You need to prepare an Oracle database by running the script `ora_mktest.sql`.
+That will create the users `testschema1` and `testschema2` and some tables
+and other objects in the respective schemas.
+The Oracle server must be accessible with an empty connect string, like
+
+    sqlplus testschema1/good_password
+
+So either the server is local and you set the `ORACLE_SID` environment
+variable, or you set the `TWO_TASK` environment variable for a remote
+connection.
+
+To run the regression tests, you have to install `db_migrator` and
+`ora_migrator` (`make install`).  Create a PostgreSQL cluster with `initdb`
+and start it.  Make sure that the environment of the PostgreSQL server is
+set up for a connection with an empty connection string as described above.
+
+Then you can start the regression tests from the `ora_migrator` software
+directory with
+
+    make installcheck
+
+That will exercise the tests in the `sql` directory and compare with the
+results in `expected`.  For details, see the end of [the documentation on
+the Extension Building Infrastructure][pgxs].
+
+ [pgxs]: https://www.postgresql.org/docs/current/extend-pgxs.html
+
 Support
 =======
 
