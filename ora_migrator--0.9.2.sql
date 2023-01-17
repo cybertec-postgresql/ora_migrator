@@ -340,6 +340,91 @@ $$DECLARE
       '       uniqueness\n'
       'FROM %I.index_exp';
 
+   partition_cols_sql text := E'CREATE FOREIGN TABLE %I.partition_columns (\n'
+      '   schema          text NOT NULL,\n'
+      '   table_name      text NOT NULL,\n'
+      '   partition_name  text NOT NULL,\n'
+      '   column_name     text NOT NULL,\n'
+      '   column_position integer NOT NULL,\n'
+      '   type            text NOT NULL,\n'
+      '   position        integer NOT NULL,\n'
+      '   values          text\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT table_owner,\n'
+         '       part.table_name,\n'
+         '       partition_name,\n'
+         '       column_name,\n'
+         '       column_position,\n'
+         '       partitioning_type,\n'
+         '       partition_position,\n'
+         '       high_value\n'
+         'FROM dba_tab_partitions part\n'
+         '   JOIN dba_part_tables info\n'
+         '      ON part.table_owner = info.owner\n'
+         '         AND part.table_name = info.table_name\n'
+         '   JOIN dba_part_key_columns cols\n'
+         '      ON part.table_owner = cols.owner\n'
+         '         AND part.table_name = cols.name\n'
+         'WHERE table_owner NOT IN( ' || sys_schemas || E')\n'
+         '   AND object_type = ''''TABLE''''\n'
+         '   AND partitioning_type IN (''''LIST'''', ''''RANGE'''', ''''HASH'''')\n'
+      ')'', max_long ''%s'', readonly ''true'')';
+   
+   partitions_sql text := E'CREATE VIEW %I.partitions AS\n'
+      'SELECT schema,\n'
+      '       table_name,\n'
+      '       partition_name,\n'
+      '       string_agg(column_name, TEXT '''' ORDER BY column_position) AS expression,\n'
+      '       type, position, values,\n'
+      '       coalesce(values = ''DEFAULT'', false) AS is_default\n'
+      'FROM %I.partition_columns\n'
+      'GROUP BY schema, table_name, partition_name,\n'
+      '         type, position, values';
+
+   subpartition_cols_sql text := E'CREATE FOREIGN TABLE %I.subpartition_columns (\n'
+      '   schema            text NOT NULL,\n'
+      '   table_name        text NOT NULL,\n'
+      '   partition_name    text NOT NULL,\n'
+      '   subpartition_name text NOT NULL,\n'
+      '   column_name       text NOT NULL,\n'
+      '   column_position   integer NOT NULL,\n'
+      '   type              text NOT NULL,\n'
+      '   position          integer NOT NULL,\n'
+      '   values            text\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT table_owner,\n'
+         '       part.table_name,\n'
+         '       partition_name,\n'
+         '       subpartition_name,\n'
+         '       column_name,\n'
+         '       column_position,\n'
+         '       subpartitioning_type,\n'
+         '       subpartition_position,\n'
+         '       high_value\n'
+         'FROM dba_tab_subpartitions part\n'
+         '   JOIN dba_part_tables info\n'
+         '      ON part.table_owner = info.owner\n'
+         '         AND part.table_name = info.table_name\n'
+         '   JOIN dba_subpart_key_columns cols\n'
+         '      ON part.table_owner = cols.owner\n'
+         '         AND part.table_name = cols.name\n'
+         'WHERE table_owner NOT IN( ' || sys_schemas || E')\n'
+         '   AND object_type = ''''TABLE''''\n'
+         '   AND partitioning_type IN (''''LIST'''', ''''RANGE'''', ''''HASH'''')\n'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   subpartitions_sql text := E'CREATE VIEW %I.subpartitions AS\n'
+      'SELECT schema,\n'
+      '       table_name,\n'
+      '       partition_name,\n'
+      '       subpartition_name,\n'
+      '       string_agg(column_name, TEXT '''' ORDER BY column_position) AS expression,\n'
+      '       type, position, values,\n'
+      '       coalesce(values = ''DEFAULT'', false) AS is_default\n'
+      'FROM %I.subpartition_columns \n'
+      'GROUP BY schema, table_name, partition_name, subpartition_name,\n'
+      '         type, position, values';
+
    schemas_sql text := E'CREATE FOREIGN TABLE %I.schemas (\n'
       '   schema text NOT NULL\n'
       ') SERVER %I OPTIONS (table ''('
@@ -625,6 +710,19 @@ BEGIN
    EXECUTE format('DROP VIEW IF EXISTS %I.indexes', schema);
    EXECUTE format(indexes_sql, schema, schema);
    EXECUTE format('COMMENT ON VIEW %I.indexes IS ''Oracle indexes on foreign server "%I"''', schema, server);
+   /* partitions and subpartitions */
+   EXECUTE format('DROP VIEW IF EXISTS %I.partitions', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.partition_columns', schema);
+   EXECUTE format(partition_cols_sql, schema, server, v_max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.partition_columns IS ''Oracle partition columns on foreign server "%I"''', schema, server);
+   EXECUTE format(partitions_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.partitions IS ''Oracle partitions on foreign server "%I"''', schema, server);
+   EXECUTE format('DROP VIEW IF EXISTS %I.subpartitions', schema);
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.subpartition_columns', schema);
+   EXECUTE format(subpartition_cols_sql, schema, server, v_max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.subpartition_columns IS ''Oracle subpartition columns on foreign server "%I"''', schema, server);
+   EXECUTE format(subpartitions_sql, schema, schema);
+   EXECUTE format('COMMENT ON VIEW %I.subpartitions IS ''Oracle subpartitions on foreign server "%I"''', schema, server);
    /* schemas */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.schemas', schema);
    EXECUTE format(schemas_sql, schema, server, v_max_long);
@@ -711,6 +809,12 @@ BEGIN
     */
    s := regexp_replace(s, '"([^"]*)"\."([^"]*)"\."nextval"',
                           'nextval(''"\1"."\2"'')', 'gi');
+   /*
+    * Retrieve only two first arguments from to_date()
+    * Excludes NLS options
+    */
+   s := regexp_replace(s, 'to_date\((''[^,]*''),\s?(''[^,]*'').*\)',
+                          'to_date(\1, \2)', 'i');
 
    RETURN s;
 END;$$;

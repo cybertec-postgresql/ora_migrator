@@ -11,6 +11,7 @@ DEFINE tablespace = USERS
 /* clean up from previous installation */
 DROP USER testschema1 CASCADE;
 DROP USER testschema2 CASCADE;
+DROP USER testschema3 CASCADE;
 
 /* create users and schemas */
 CREATE USER testschema1 IDENTIFIED BY good_password
@@ -18,6 +19,10 @@ CREATE USER testschema1 IDENTIFIED BY good_password
    QUOTA UNLIMITED ON &tablespace;
 
 CREATE USER testschema2 IDENTIFIED BY good_password
+   DEFAULT TABLESPACE &tablespace
+   QUOTA UNLIMITED ON &tablespace;
+
+CREATE USER testschema3 IDENTIFIED BY good_password
    DEFAULT TABLESPACE &tablespace
    QUOTA UNLIMITED ON &tablespace;
 
@@ -29,6 +34,9 @@ GRANT CONNECT, CREATE ANY TABLE, CREATE ANY INDEX, CREATE VIEW,
 
 GRANT CONNECT, CREATE TABLE, CREATE VIEW, CREATE TRIGGER, CREATE PROCEDURE
    TO testschema2;
+
+GRANT CONNECT, CREATE TABLE, CREATE VIEW, CREATE TRIGGER, CREATE PROCEDURE
+   TO testschema3;
 
 /* connect as "testschema1" to create some objects */
 CONNECT testschema1/good_password
@@ -126,7 +134,7 @@ INSERT INTO baddata (id, value1, value2)
 
 COMMIT;
 
-/* connect as "testschema1" to create some objects */
+/* connect as "testschema2" to create some objects */
 CONNECT testschema2/good_password
 
 CREATE TABLE tab3 (
@@ -144,6 +152,53 @@ INSERT INTO tab3 (id, tab2_id, f, ids)
 
 INSERT INTO tab3 (id, tab2_id, f, ids)
    VALUES (2, 1, -1, INTERVAL '01:30' MINUTE TO SECOND);
+
+COMMIT;
+
+/* connect as "testschema3" to create some partitioned tables */
+CONNECT testschema3/good_password
+
+CREATE TABLE part1 (c1 integer, c2 varchar2(100))
+  PARTITION BY LIST (c1) (
+    PARTITION part1_a VALUES (1, 2, 3),
+    PARTITION part1_b VALUES (4, 5),
+    PARTITION part1_default VALUES (DEFAULT)
+  );
+
+CREATE TABLE part2 (c1 integer, c2 varchar2(100))
+  PARTITION BY RANGE (c1) (
+    PARTITION part2_a VALUES LESS THAN (0),
+    PARTITION part2_b VALUES LESS THAN (100),
+    PARTITION part2_c VALUES LESS THAN (MAXVALUE)
+  );
+
+CREATE TABLE part3 (c1 integer, c2 varchar2(100))
+  PARTITION BY HASH (c1) (
+    PARTITION part3_a,
+    PARTITION part3_b,
+    PARTITION part3_c
+  );
+
+CREATE TABLE part4 (c1 char(1), c2 date)
+  PARTITION BY LIST (c1)
+  SUBPARTITION BY RANGE (c2) (
+    PARTITION part4_a VALUES ('A') (
+      SUBPARTITION part4_a_2020 VALUES LESS THAN 
+        (TO_DATE('01-JAN-2021','dd-MON-yyyy')),
+      SUBPARTITION part4_a_2021 VALUES LESS THAN 
+        (TO_DATE('01-JAN-2022','dd-MON-yyyy')),
+      SUBPARTITION part4_a_2022 VALUES LESS THAN 
+        (TO_DATE('01-JAN-2023','dd-MON-yyyy'))
+    ),
+    PARTITION part4_b VALUES ('B') (
+      SUBPARTITION part4_b_2020 VALUES LESS THAN 
+        (TO_DATE('01-JAN-2021','dd-MON-yyyy')),
+      SUBPARTITION part4_b_2021 VALUES LESS THAN 
+        (TO_DATE('01-JAN-2022','dd-MON-yyyy')),
+      SUBPARTITION part4_b_2022 VALUES LESS THAN 
+        (TO_DATE('01-JAN-2023','dd-MON-yyyy'))
+    )
+  );
 
 COMMIT;
 

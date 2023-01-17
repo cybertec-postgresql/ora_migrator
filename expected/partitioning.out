@@ -1,0 +1,122 @@
+/* connect as migration user */
+\connect - migrator
+SET client_min_messages = WARNING;
+/* set up staging schemas */
+SELECT db_migrate_prepare(
+   plugin => 'ora_migrator',
+   server => 'oracle',
+   only_schemas => ARRAY['TESTSCHEMA3'],
+   options => JSONB '{"max_long": 1024}'
+);
+ db_migrate_prepare 
+--------------------
+                  0
+(1 row)
+
+/* convert values based on Oracle function */
+UPDATE pgsql_stage.subpartitions
+   SET values = oracle_translate_expression(values)
+ WHERE schema = 'testschema3'
+   AND table_name = 'part4';
+/* perform the data migration */
+SELECT db_migrate_mkforeign(
+   plugin => 'ora_migrator',
+   server => 'oracle',
+   options => JSONB '{"max_long": 1024}'
+);
+ db_migrate_mkforeign 
+----------------------
+                    0
+(1 row)
+
+/* migrate the rest of the database */
+SELECT db_migrate_tables(
+   plugin => 'ora_migrator'
+);
+ db_migrate_tables 
+-------------------
+                 0
+(1 row)
+
+/* we have to check the log table before we drop the schema */
+SELECT operation, schema_name, object_name, failed_sql, error_message
+FROM pgsql_stage.migrate_log
+ORDER BY log_time;
+ operation | schema_name | object_name | failed_sql | error_message 
+-----------+-------------+-------------+------------+---------------
+(0 rows)
+
+SELECT db_migrate_finish();
+ db_migrate_finish 
+-------------------
+                 0
+(1 row)
+
+/* check results */
+\d+ testschema3.part1
+                                  Partitioned table "testschema3.part1"
+ Column |          Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+------------------------+-----------+----------+---------+----------+--------------+-------------
+ c1     | numeric                |           |          |         | main     |              | 
+ c2     | character varying(100) |           |          |         | extended |              | 
+Partition key: LIST (c1)
+Partitions: testschema3.part1_a FOR VALUES IN ('1', '2', '3'),
+            testschema3.part1_b FOR VALUES IN ('4', '5'),
+            testschema3.part1_default DEFAULT
+
+\d+ testschema3.part2
+                                  Partitioned table "testschema3.part2"
+ Column |          Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+------------------------+-----------+----------+---------+----------+--------------+-------------
+ c1     | numeric                |           |          |         | main     |              | 
+ c2     | character varying(100) |           |          |         | extended |              | 
+Partition key: RANGE (c1)
+Partitions: testschema3.part2_a FOR VALUES FROM (MINVALUE) TO ('0'),
+            testschema3.part2_b FOR VALUES FROM ('0') TO ('100'),
+            testschema3.part2_c FOR VALUES FROM ('100') TO (MAXVALUE)
+
+\d testschema3.part3
+              Partitioned table "testschema3.part3"
+ Column |          Type          | Collation | Nullable | Default 
+--------+------------------------+-----------+----------+---------
+ c1     | numeric                |           |          | 
+ c2     | character varying(100) |           |          | 
+Partition key: HASH (c1)
+Number of partitions: 3 (Use \d+ to list them.)
+
+\d+ testschema3.part4
+                                      Partitioned table "testschema3.part4"
+ Column |              Type              | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+--------------------------------+-----------+----------+---------+----------+--------------+-------------
+ c1     | character(1)                   |           |          |         | extended |              | 
+ c2     | timestamp(0) without time zone |           |          |         | plain    |              | 
+Partition key: LIST (c1)
+Partitions: testschema3.part4_a FOR VALUES IN ('A'), PARTITIONED,
+            testschema3.part4_b FOR VALUES IN ('B'), PARTITIONED
+
+\d+ testschema3.part4_a
+                                     Partitioned table "testschema3.part4_a"
+ Column |              Type              | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+--------------------------------+-----------+----------+---------+----------+--------------+-------------
+ c1     | character(1)                   |           |          |         | extended |              | 
+ c2     | timestamp(0) without time zone |           |          |         | plain    |              | 
+Partition of: testschema3.part4 FOR VALUES IN ('A')
+Partition constraint: ((c1 IS NOT NULL) AND (c1 = 'A'::character(1)))
+Partition key: RANGE (c2)
+Partitions: testschema3.part4_a_2020 FOR VALUES FROM (MINVALUE) TO ('Fri Jan 01 00:00:00 2021'),
+            testschema3.part4_a_2021 FOR VALUES FROM ('Fri Jan 01 00:00:00 2021') TO ('Sat Jan 01 00:00:00 2022'),
+            testschema3.part4_a_2022 FOR VALUES FROM ('Sat Jan 01 00:00:00 2022') TO ('Sun Jan 01 00:00:00 2023')
+
+\d+ testschema3.part4_b
+                                     Partitioned table "testschema3.part4_b"
+ Column |              Type              | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+--------------------------------+-----------+----------+---------+----------+--------------+-------------
+ c1     | character(1)                   |           |          |         | extended |              | 
+ c2     | timestamp(0) without time zone |           |          |         | plain    |              | 
+Partition of: testschema3.part4 FOR VALUES IN ('B')
+Partition constraint: ((c1 IS NOT NULL) AND (c1 = 'B'::character(1)))
+Partition key: RANGE (c2)
+Partitions: testschema3.part4_b_2020 FOR VALUES FROM (MINVALUE) TO ('Fri Jan 01 00:00:00 2021'),
+            testschema3.part4_b_2021 FOR VALUES FROM ('Fri Jan 01 00:00:00 2021') TO ('Sat Jan 01 00:00:00 2022'),
+            testschema3.part4_b_2022 FOR VALUES FROM ('Sat Jan 01 00:00:00 2022') TO ('Sun Jan 01 00:00:00 2023')
+
