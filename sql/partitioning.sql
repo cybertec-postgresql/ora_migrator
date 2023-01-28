@@ -12,12 +12,6 @@ SELECT db_migrate_prepare(
    options => JSONB '{"max_long": 1024}'
 );
 
-/* convert values based on Oracle function */
-UPDATE pgsql_stage.subpartitions
-   SET values = oracle_translate_expression(values)
- WHERE schema = 'testschema3'
-   AND table_name = 'part4';
-
 /* perform the data migration */
 SELECT db_migrate_mkforeign(
    plugin => 'ora_migrator',

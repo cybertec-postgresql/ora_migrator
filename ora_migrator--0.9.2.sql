@@ -12,6 +12,7 @@ CREATE FUNCTION create_oraviews(
 $$DECLARE
    old_msglevel text;
    v_max_long   integer := 32767;
+   v_extschema  text;
 
    sys_schemas text :=
       E'''''ANONYMOUS'''', ''''APEX_PUBLIC_USER'''', ''''APEX_030200'''', ''''APEX_040000'''',\n'
@@ -370,16 +371,43 @@ $$DECLARE
          '   AND partitioning_type IN (''''LIST'''', ''''RANGE'''', ''''HASH'''')\n'
       ')'', max_long ''%s'', readonly ''true'')';
    
-   partitions_sql text := E'CREATE VIEW %I.partitions AS\n'
-      'SELECT schema,\n'
-      '       table_name,\n'
-      '       partition_name,\n'
-      '       string_agg(column_name, TEXT '''' ORDER BY column_position) AS expression,\n'
-      '       type, position, values,\n'
-      '       coalesce(values = ''DEFAULT'', false) AS is_default\n'
-      'FROM %I.partition_columns\n'
-      'GROUP BY schema, table_name, partition_name,\n'
-      '         type, position, values';
+   partitions_sql text := E'CREATE VIEW %1$I.partitions AS\n'
+      'WITH catalog AS (\n'
+      '   SELECT schema,\n'
+      '          table_name,\n'
+      '          partition_name,\n'
+      '          string_agg(column_name, TEXT '''' ORDER BY column_position) AS expression,\n'
+      '          type, position,\n'
+      '          %2$I.oracle_translate_expression(values) AS values\n'
+      '   FROM %1$I.partition_columns\n'
+      '   GROUP BY schema, table_name, partition_name,\n'
+      '         type, position, values\n'
+      '), list_partitions AS (\n'
+      '   SELECT schema, table_name, partition_name, type, expression,\n'
+      '      coalesce(values = ''DEFAULT'', false) AS is_default,\n'
+      '      string_to_array(values, '','') AS values\n'
+      '   FROM catalog WHERE type = ''LIST''\n'
+      '), range_partitions AS (\n'
+      '   SELECT schema, table_name, partition_name, type, expression, false,\n'
+      '      ARRAY[\n'
+      '         coalesce(first_value(values) OVER (\n'
+      '            PARTITION BY schema, table_name\n'
+      '            ORDER BY position\n'
+      '            RANGE BETWEEN 1 PRECEDING AND CURRENT ROW\n'
+      '            EXCLUDE CURRENT ROW\n'
+      '         ), ''MINVALUE''), values\n'
+      '      ] AS values\n'
+      '   FROM catalog WHERE type = ''RANGE''\n'
+      '), hash_partitions AS (\n'
+      '   SELECT schema, table_name, partition_name, type, expression, false,\n'
+      '      ARRAY[\n'
+      '         max(position) OVER (PARTITION BY schema, table_name), position - 1\n'
+      '      ]::text[] AS values\n'
+      '   FROM catalog WHERE type = ''HASH''\n'
+      ')\n'
+      'SELECT * FROM list_partitions\n'
+      'UNION SELECT * FROM range_partitions\n'
+      'UNION SELECT * FROM hash_partitions';
 
    subpartition_cols_sql text := E'CREATE FOREIGN TABLE %I.subpartition_columns (\n'
       '   schema            text NOT NULL,\n'
@@ -413,17 +441,44 @@ $$DECLARE
          '   AND partitioning_type IN (''''LIST'''', ''''RANGE'''', ''''HASH'''')\n'
       ')'', max_long ''%s'', readonly ''true'')';
 
-   subpartitions_sql text := E'CREATE VIEW %I.subpartitions AS\n'
-      'SELECT schema,\n'
-      '       table_name,\n'
-      '       partition_name,\n'
-      '       subpartition_name,\n'
-      '       string_agg(column_name, TEXT '''' ORDER BY column_position) AS expression,\n'
-      '       type, position, values,\n'
-      '       coalesce(values = ''DEFAULT'', false) AS is_default\n'
-      'FROM %I.subpartition_columns \n'
-      'GROUP BY schema, table_name, partition_name, subpartition_name,\n'
-      '         type, position, values';
+   subpartitions_sql text := E'CREATE VIEW %1$I.subpartitions AS\n'
+      'WITH catalog AS (\n'
+      '   SELECT schema,\n'
+      '          table_name,\n'
+      '          partition_name,\n'
+      '          subpartition_name,\n'
+      '          string_agg(column_name, TEXT '''' ORDER BY column_position) AS expression,\n'
+      '          type, position,\n'
+      '          %2$I.oracle_translate_expression(values) AS values\n'
+      '   FROM %1$I.subpartition_columns \n'
+      '   GROUP BY schema, table_name, partition_name, subpartition_name,\n'
+      '            type, position, values'
+      '), list_subpartitions AS (\n'
+      '   SELECT schema, table_name, partition_name, subpartition_name, type, expression,\n'
+      '      coalesce(values = ''DEFAULT'', false) AS is_default,\n'
+      '      string_to_array(values, '','') AS values\n'
+      '   FROM catalog WHERE type = ''LIST''\n'
+      '), range_subpartitions AS (\n'
+      '   SELECT schema, table_name, partition_name, subpartition_name, type, expression, false,\n'
+      '      ARRAY[\n'
+      '         coalesce(first_value(values) OVER (\n'
+      '            PARTITION BY schema, table_name, partition_name\n'
+      '            ORDER BY position\n'
+      '            RANGE BETWEEN 1 PRECEDING AND CURRENT ROW\n'
+      '            EXCLUDE CURRENT ROW\n'
+      '         ), ''MINVALUE''), values\n'
+      '      ] AS values\n'
+      '   FROM catalog WHERE type = ''RANGE''\n'
+      '), hash_subpartitions AS (\n'
+      '   SELECT schema, table_name, partition_name, subpartition_name, type, expression, false,\n'
+      '      ARRAY[\n'
+      '         max(position) OVER (PARTITION BY schema, table_name, partition_name), position - 1\n'
+      '      ]::text[] AS values\n'
+      '   FROM catalog WHERE type = ''HASH'''
+      ')\n'
+      'SELECT * FROM list_subpartitions\n'
+      'UNION SELECT * FROM range_subpartitions\n'
+      'UNION SELECT * FROM hash_subpartitions';
 
    schemas_sql text := E'CREATE FOREIGN TABLE %I.schemas (\n'
       '   schema text NOT NULL\n'
@@ -656,6 +711,11 @@ $$DECLARE
       ')';
 
 BEGIN
+   /* set "search_path" to the extension schema */
+   SELECT extnamespace::regnamespace::text INTO v_extschema
+   FROM pg_extension
+   WHERE extname = 'ora_migrator';
+
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
    /* make the output less verbose */
@@ -715,13 +775,13 @@ BEGIN
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.partition_columns', schema);
    EXECUTE format(partition_cols_sql, schema, server, v_max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.partition_columns IS ''Oracle partition columns on foreign server "%I"''', schema, server);
-   EXECUTE format(partitions_sql, schema, schema);
+   EXECUTE format(partitions_sql, schema, v_extschema);
    EXECUTE format('COMMENT ON VIEW %I.partitions IS ''Oracle partitions on foreign server "%I"''', schema, server);
    EXECUTE format('DROP VIEW IF EXISTS %I.subpartitions', schema);
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.subpartition_columns', schema);
    EXECUTE format(subpartition_cols_sql, schema, server, v_max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.subpartition_columns IS ''Oracle subpartition columns on foreign server "%I"''', schema, server);
-   EXECUTE format(subpartitions_sql, schema, schema);
+   EXECUTE format(subpartitions_sql, schema, v_extschema);
    EXECUTE format('COMMENT ON VIEW %I.subpartitions IS ''Oracle subpartitions on foreign server "%I"''', schema, server);
    /* schemas */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.schemas', schema);
