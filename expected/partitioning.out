@@ -1,6 +1,7 @@
 /* connect as migration user */
 \connect - migrator
 SET client_min_messages = WARNING;
+SET datestyle = 'ISO, MDY';
 /* set up staging schemas */
 SELECT db_migrate_prepare(
    plugin => 'ora_migrator',
@@ -98,9 +99,9 @@ Partitions: testschema3.part4_a FOR VALUES IN ('A'), PARTITIONED,
 Partition of: testschema3.part4 FOR VALUES IN ('A')
 Partition constraint: ((c1 IS NOT NULL) AND (c1 = 'A'::character(1)))
 Partition key: RANGE (c2)
-Partitions: testschema3.part4_a_2020 FOR VALUES FROM (MINVALUE) TO ('Fri Jan 01 00:00:00 2021'),
-            testschema3.part4_a_2021 FOR VALUES FROM ('Fri Jan 01 00:00:00 2021') TO ('Sat Jan 01 00:00:00 2022'),
-            testschema3.part4_a_2022 FOR VALUES FROM ('Sat Jan 01 00:00:00 2022') TO ('Sun Jan 01 00:00:00 2023')
+Partitions: testschema3.part4_a_2020 FOR VALUES FROM (MINVALUE) TO ('2021-01-01 00:00:00'),
+            testschema3.part4_a_2021 FOR VALUES FROM ('2021-01-01 00:00:00') TO ('2022-01-01 00:00:00'),
+            testschema3.part4_a_2022 FOR VALUES FROM ('2022-01-01 00:00:00') TO ('2023-01-01 00:00:00')
 
 \d+ testschema3.part4_b
                                      Partitioned table "testschema3.part4_b"
@@ -111,7 +112,39 @@ Partitions: testschema3.part4_a_2020 FOR VALUES FROM (MINVALUE) TO ('Fri Jan 01 
 Partition of: testschema3.part4 FOR VALUES IN ('B')
 Partition constraint: ((c1 IS NOT NULL) AND (c1 = 'B'::character(1)))
 Partition key: RANGE (c2)
-Partitions: testschema3.part4_b_2020 FOR VALUES FROM (MINVALUE) TO ('Fri Jan 01 00:00:00 2021'),
-            testschema3.part4_b_2021 FOR VALUES FROM ('Fri Jan 01 00:00:00 2021') TO ('Sat Jan 01 00:00:00 2022'),
-            testschema3.part4_b_2022 FOR VALUES FROM ('Sat Jan 01 00:00:00 2022') TO ('Sun Jan 01 00:00:00 2023')
+Partitions: testschema3.part4_b_2020 FOR VALUES FROM (MINVALUE) TO ('2021-01-01 00:00:00'),
+            testschema3.part4_b_2021 FOR VALUES FROM ('2021-01-01 00:00:00') TO ('2022-01-01 00:00:00'),
+            testschema3.part4_b_2022 FOR VALUES FROM ('2022-01-01 00:00:00') TO ('2023-01-01 00:00:00')
+
+SELECT tableoid::regclass partname, * FROM testschema3.part1;
+         partname          | c1 | c2 
+---------------------------+----+----
+ testschema3.part1_a       |  1 | 
+ testschema3.part1_b       |  5 | 
+ testschema3.part1_default | 10 | 
+(3 rows)
+
+SELECT tableoid::regclass partname, * FROM testschema3.part2;
+      partname       | c1  | c2 
+---------------------+-----+----
+ testschema3.part2_a |  -1 | 
+ testschema3.part2_b |  99 | 
+ testschema3.part2_c | 100 | 
+(3 rows)
+
+SELECT tableoid::regclass partname, * FROM testschema3.part3;
+ partname | c1 | c2 
+----------+----+----
+(0 rows)
+
+SELECT tableoid::regclass partname, * FROM testschema3.part4;
+         partname         | c1 |         c2          
+--------------------------+----+---------------------
+ testschema3.part4_a_2020 | A  | 2020-12-31 00:00:00
+ testschema3.part4_a_2021 | A  | 2021-12-31 00:00:00
+ testschema3.part4_a_2022 | A  | 2022-12-31 00:00:00
+ testschema3.part4_b_2020 | B  | 2020-12-31 00:00:00
+ testschema3.part4_b_2021 | B  | 2021-12-31 00:00:00
+ testschema3.part4_b_2022 | B  | 2022-12-31 00:00:00
+(6 rows)
 

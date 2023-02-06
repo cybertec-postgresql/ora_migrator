@@ -165,6 +165,10 @@ CREATE TABLE part1 (c1 integer, c2 varchar2(100))
     PARTITION part1_default VALUES (DEFAULT)
   );
 
+INSERT INTO part1 (c1, c2) VALUES (1, null);
+INSERT INTO part1 (c1, c2) VALUES (5, null);
+INSERT INTO part1 (c1, c2) VALUES (10, null);
+
 CREATE TABLE part2 (c1 integer, c2 varchar2(100))
   PARTITION BY RANGE (c1) (
     PARTITION part2_a VALUES LESS THAN (0),
@@ -172,12 +176,20 @@ CREATE TABLE part2 (c1 integer, c2 varchar2(100))
     PARTITION part2_c VALUES LESS THAN (MAXVALUE)
   );
 
+INSERT INTO part2 (c1, c2) VALUES (-1, null);
+INSERT INTO part2 (c1, c2) VALUES (100, null);
+INSERT INTO part2 (c1, c2) VALUES (99, null);
+
 CREATE TABLE part3 (c1 integer, c2 varchar2(100))
   PARTITION BY HASH (c1) (
     PARTITION part3_a,
     PARTITION part3_b,
     PARTITION part3_c
   );
+
+INSERT INTO part3 (c, c2) VALUES (1, null);
+INSERT INTO part3 (c, c2) VALUES (11, null);
+INSERT INTO part3 (c, c2) VALUES (1111, null);
 
 CREATE TABLE part4 (c1 char(1), c2 date)
   PARTITION BY LIST (c1)
@@ -199,6 +211,14 @@ CREATE TABLE part4 (c1 char(1), c2 date)
         (TO_DATE('01-JAN-2023','dd-MON-yyyy'))
     )
   );
+
+INSERT INTO part4 (c1, c2) VALUES ('A', '31-DEC-2020');
+INSERT INTO part4 (c1, c2) VALUES ('A', '31-DEC-2021');
+INSERT INTO part4 (c1, c2) VALUES ('A', '31-DEC-2022');
+
+INSERT INTO part4 (c1, c2) VALUES ('B', '31-DEC-2020');
+INSERT INTO part4 (c1, c2) VALUES ('B', '31-DEC-2021');
+INSERT INTO part4 (c1, c2) VALUES ('B', '31-DEC-2022');
 
 COMMIT;
 

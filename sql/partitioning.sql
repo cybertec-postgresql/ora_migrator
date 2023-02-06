@@ -3,6 +3,7 @@
 \connect - migrator
 
 SET client_min_messages = WARNING;
+SET datestyle = 'ISO, MDY';
 
 /* set up staging schemas */
 SELECT db_migrate_prepare(
@@ -40,3 +41,8 @@ SELECT db_migrate_finish();
 \d+ testschema3.part4
 \d+ testschema3.part4_a
 \d+ testschema3.part4_b
+
+SELECT tableoid::regclass partname, * FROM testschema3.part1;
+SELECT tableoid::regclass partname, * FROM testschema3.part2;
+SELECT tableoid::regclass partname, * FROM testschema3.part3;
+SELECT tableoid::regclass partname, * FROM testschema3.part4;
