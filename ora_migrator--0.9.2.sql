@@ -377,8 +377,7 @@ $$DECLARE
       '          table_name,\n'
       '          partition_name,\n'
       '          string_agg(column_name, TEXT '''' ORDER BY column_position) AS expression,\n'
-      '          type, position,\n'
-      '          %2$I.oracle_translate_expression(values) AS values\n'
+      '          type, position, values\n'
       '   FROM %1$I.partition_columns\n'
       '   GROUP BY schema, table_name, partition_name,\n'
       '         type, position, values\n'
@@ -448,8 +447,7 @@ $$DECLARE
       '          partition_name,\n'
       '          subpartition_name,\n'
       '          string_agg(column_name, TEXT '''' ORDER BY column_position) AS expression,\n'
-      '          type, position,\n'
-      '          %2$I.oracle_translate_expression(values) AS values\n'
+      '          type, position, values\n'
       '   FROM %1$I.subpartition_columns \n'
       '   GROUP BY schema, table_name, partition_name, subpartition_name,\n'
       '            type, position, values'
@@ -711,11 +709,6 @@ $$DECLARE
       ')';
 
 BEGIN
-   /* set "search_path" to the extension schema */
-   SELECT extnamespace::regnamespace::text INTO v_extschema
-   FROM pg_extension
-   WHERE extname = 'ora_migrator';
-
    /* remember old setting */
    old_msglevel := current_setting('client_min_messages');
    /* make the output less verbose */
@@ -775,13 +768,13 @@ BEGIN
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.partition_columns', schema);
    EXECUTE format(partition_cols_sql, schema, server, v_max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.partition_columns IS ''Oracle partition columns on foreign server "%I"''', schema, server);
-   EXECUTE format(partitions_sql, schema, v_extschema);
+   EXECUTE format(partitions_sql, schema);
    EXECUTE format('COMMENT ON VIEW %I.partitions IS ''Oracle partitions on foreign server "%I"''', schema, server);
    EXECUTE format('DROP VIEW IF EXISTS %I.subpartitions', schema);
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.subpartition_columns', schema);
    EXECUTE format(subpartition_cols_sql, schema, server, v_max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.subpartition_columns IS ''Oracle subpartition columns on foreign server "%I"''', schema, server);
-   EXECUTE format(subpartitions_sql, schema, v_extschema);
+   EXECUTE format(subpartitions_sql, schema);
    EXECUTE format('COMMENT ON VIEW %I.subpartitions IS ''Oracle subpartitions on foreign server "%I"''', schema, server);
    /* schemas */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.schemas', schema);
