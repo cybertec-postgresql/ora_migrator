@@ -866,7 +866,7 @@ BEGIN
     * Retrieve only two first arguments from to_date()
     * Excludes NLS options
     */
-   s := regexp_replace(s, 'to_date\((''[^,]*''),\s?(''[^,]*'').*\)',
+   s := regexp_replace(s, 'to_date\(\s*(''[^,]*'')\s*,\s*(''[^,]*'')[^)]*\)',
                           'to_date(\1, \2)', 'i');
 
    RETURN s;
