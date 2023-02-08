@@ -1,9 +1,9 @@
 SET client_min_messages = WARNING;
 \dn
-    List of schemas
-    Name     |  Owner   
--------------+----------
- public      | postgres
+         List of schemas
+    Name     |       Owner       
+-------------+-------------------
+ public      | pg_database_owner
  testschema1 | migrator
  testschema2 | migrator
 (3 rows)
