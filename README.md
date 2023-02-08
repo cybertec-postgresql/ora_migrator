@@ -346,6 +346,16 @@ This is used to clean up after you have finished migrating from Oracle.
 - `pgstage_schema` (default `pgsql_stage`): The name of the PostgreSQL stage
   created by `oracle_migrate_prepare`
 
+Limitations
+===========
+
+Not all Oracle partitioning options are supported by `ora_migrator`.
+Only list, hash and range partitioning are supported in PostgreSQL, so other
+partitioning strategies are not supported.  Also, list and range
+partitioning with a partitioning key with two or more columns is not
+supported.  When `ora_migrator` encounters a partitioning schema that it
+cannot migrate, it will migrate the table to an unpartitioned table.
+
 Replication
 ===========
 

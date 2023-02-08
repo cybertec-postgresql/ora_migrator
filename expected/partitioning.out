@@ -1,3 +1,4 @@
+/* for requirements, see "migrate.sql" */
 /* connect as migration user */
 \connect - migrator
 SET client_min_messages = WARNING;
@@ -14,7 +15,7 @@ SELECT db_migrate_prepare(
                   0
 (1 row)
 
-/* perform the data migration */
+/* create foreign tables */
 SELECT db_migrate_mkforeign(
    plugin => 'ora_migrator',
    server => 'oracle',
@@ -25,7 +26,7 @@ SELECT db_migrate_mkforeign(
                     0
 (1 row)
 
-/* migrate the rest of the database */
+/* migrate the data */
 SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );
@@ -34,14 +35,16 @@ SELECT db_migrate_tables(
                  0
 (1 row)
 
-/* we have to check the log table before we drop the schema */
-SELECT operation, schema_name, object_name, failed_sql, error_message
-FROM pgsql_stage.migrate_log
-ORDER BY log_time;
- operation | schema_name | object_name | failed_sql | error_message 
------------+-------------+-------------+------------+---------------
-(0 rows)
+/* migrate the constraints */
+SELECT db_migrate_constraints(
+   plugin => 'ora_migrator'
+);
+ db_migrate_constraints 
+------------------------
+                      0
+(1 row)
 
+/* clean up */
 SELECT db_migrate_finish();
  db_migrate_finish 
 -------------------
@@ -53,98 +56,75 @@ SELECT db_migrate_finish();
                                   Partitioned table "testschema3.part1"
  Column |          Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
 --------+------------------------+-----------+----------+---------+----------+--------------+-------------
- c1     | numeric                |           |          |         | main     |              | 
- c2     | character varying(100) |           |          |         | extended |              | 
+ c1     | integer                |           | not null |         | plain    |              | 
+ c2     | character varying(100) |           | not null |         | extended |              | 
 Partition key: LIST (c1)
-Partitions: testschema3.part1_a FOR VALUES IN ('1', '2', '3'),
-            testschema3.part1_b FOR VALUES IN ('4', '5'),
+Partitions: testschema3.part1_a FOR VALUES IN (1, 2, 3),
+            testschema3.part1_b FOR VALUES IN (4, 5),
             testschema3.part1_default DEFAULT
 
 \d+ testschema3.part2
-                                  Partitioned table "testschema3.part2"
+                                      Partitioned table "testschema3.part2"
+ Column |              Type              | Collation | Nullable | Default | Storage  | Stats target | Description 
+--------+--------------------------------+-----------+----------+---------+----------+--------------+-------------
+ r1     | integer                        |           | not null |         | plain    |              | 
+ h1     | character varying(100)         |           | not null |         | extended |              | 
+ h2     | timestamp(6) without time zone |           | not null |         | plain    |              | 
+Partition key: RANGE (r1)
+Partitions: testschema3.part2_a FOR VALUES FROM (MINVALUE) TO (10), PARTITIONED,
+            testschema3.part2_b FOR VALUES FROM (10) TO (100), PARTITIONED,
+            testschema3.part2_c FOR VALUES FROM (100) TO (MAXVALUE), PARTITIONED
+
+\d+ testschema3.part3
+                                  Partitioned table "testschema3.part3"
  Column |          Type          | Collation | Nullable | Default | Storage  | Stats target | Description 
 --------+------------------------+-----------+----------+---------+----------+--------------+-------------
- c1     | numeric                |           |          |         | main     |              | 
+ c1     | integer                |           |          |         | plain    |              | 
  c2     | character varying(100) |           |          |         | extended |              | 
-Partition key: RANGE (c1)
-Partitions: testschema3.part2_a FOR VALUES FROM (MINVALUE) TO ('0'),
-            testschema3.part2_b FOR VALUES FROM ('0') TO ('100'),
-            testschema3.part2_c FOR VALUES FROM ('100') TO (MAXVALUE)
-
-\d testschema3.part3
-              Partitioned table "testschema3.part3"
- Column |          Type          | Collation | Nullable | Default 
---------+------------------------+-----------+----------+---------
- c1     | numeric                |           |          | 
- c2     | character varying(100) |           |          | 
-Partition key: HASH (c1)
-Number of partitions: 3 (Use \d+ to list them.)
-
-\d+ testschema3.part4
-                                      Partitioned table "testschema3.part4"
- Column |              Type              | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+--------------------------------+-----------+----------+---------+----------+--------------+-------------
- c1     | character(1)                   |           |          |         | extended |              | 
- c2     | timestamp(0) without time zone |           |          |         | plain    |              | 
-Partition key: LIST (c1)
-Partitions: testschema3.part4_a FOR VALUES IN ('A'), PARTITIONED,
-            testschema3.part4_b FOR VALUES IN ('B'), PARTITIONED
-
-\d+ testschema3.part4_a
-                                     Partitioned table "testschema3.part4_a"
- Column |              Type              | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+--------------------------------+-----------+----------+---------+----------+--------------+-------------
- c1     | character(1)                   |           |          |         | extended |              | 
- c2     | timestamp(0) without time zone |           |          |         | plain    |              | 
-Partition of: testschema3.part4 FOR VALUES IN ('A')
-Partition constraint: ((c1 IS NOT NULL) AND (c1 = 'A'::character(1)))
-Partition key: RANGE (c2)
-Partitions: testschema3.part4_a_2020 FOR VALUES FROM (MINVALUE) TO ('2021-01-01 00:00:00'),
-            testschema3.part4_a_2021 FOR VALUES FROM ('2021-01-01 00:00:00') TO ('2022-01-01 00:00:00'),
-            testschema3.part4_a_2022 FOR VALUES FROM ('2022-01-01 00:00:00') TO ('2023-01-01 00:00:00')
-
-\d+ testschema3.part4_b
-                                     Partitioned table "testschema3.part4_b"
- Column |              Type              | Collation | Nullable | Default | Storage  | Stats target | Description 
---------+--------------------------------+-----------+----------+---------+----------+--------------+-------------
- c1     | character(1)                   |           |          |         | extended |              | 
- c2     | timestamp(0) without time zone |           |          |         | plain    |              | 
-Partition of: testschema3.part4 FOR VALUES IN ('B')
-Partition constraint: ((c1 IS NOT NULL) AND (c1 = 'B'::character(1)))
-Partition key: RANGE (c2)
-Partitions: testschema3.part4_b_2020 FOR VALUES FROM (MINVALUE) TO ('2021-01-01 00:00:00'),
-            testschema3.part4_b_2021 FOR VALUES FROM ('2021-01-01 00:00:00') TO ('2022-01-01 00:00:00'),
-            testschema3.part4_b_2022 FOR VALUES FROM ('2022-01-01 00:00:00') TO ('2023-01-01 00:00:00')
+Partition key: HASH (c2)
+Partitions: testschema3.part3_a FOR VALUES WITH (modulus 3, remainder 0), PARTITIONED,
+            testschema3.part3_b FOR VALUES WITH (modulus 3, remainder 1), PARTITIONED,
+            testschema3.part3_c FOR VALUES WITH (modulus 3, remainder 2), PARTITIONED
 
 SELECT tableoid::regclass partname, * FROM testschema3.part1;
-         partname          | c1 | c2 
----------------------------+----+----
- testschema3.part1_a       |  1 | 
- testschema3.part1_b       |  5 | 
- testschema3.part1_default | 10 | 
+         partname          | c1 |  c2  
+---------------------------+----+------
+ testschema3.part1_a       |  1 | one
+ testschema3.part1_b       |  5 | five
+ testschema3.part1_default | 10 | ten
 (3 rows)
 
 SELECT tableoid::regclass partname, * FROM testschema3.part2;
-      partname       | c1  | c2 
----------------------+-----+----
- testschema3.part2_a |  -1 | 
- testschema3.part2_b |  99 | 
- testschema3.part2_c | 100 | 
-(3 rows)
+       partname        | r1  |    h1     |         h2          
+-----------------------+-----+-----------+---------------------
+ testschema3.part2_a_2 |   1 | other     | 2023-01-01 23:00:00
+ testschema3.part2_a_2 |   1 | something | 2023-01-01 13:00:00
+ testschema3.part2_b_2 |  50 | other     | 2023-01-01 23:00:00
+ testschema3.part2_b_2 |  50 | something | 2023-01-01 13:00:00
+ testschema3.part2_c_2 | 500 | other     | 2023-01-01 23:00:00
+ testschema3.part2_c_2 | 500 | something | 2023-01-01 13:00:00
+(6 rows)
 
 SELECT tableoid::regclass partname, * FROM testschema3.part3;
- partname | c1 | c2 
-----------+----+----
-(0 rows)
-
-SELECT tableoid::regclass partname, * FROM testschema3.part4;
-         partname         | c1 |         c2          
---------------------------+----+---------------------
- testschema3.part4_a_2020 | A  | 2020-12-31 00:00:00
- testschema3.part4_a_2021 | A  | 2021-12-31 00:00:00
- testschema3.part4_a_2022 | A  | 2022-12-31 00:00:00
- testschema3.part4_b_2020 | B  | 2020-12-31 00:00:00
- testschema3.part4_b_2021 | B  | 2021-12-31 00:00:00
- testschema3.part4_b_2022 | B  | 2022-12-31 00:00:00
-(6 rows)
+       partname        | c1 | c2 
+-----------------------+----+----
+ testschema3.part3_a_1 |  1 | b
+ testschema3.part3_a_1 |  1 | d
+ testschema3.part3_a_1 |  1 | e
+ testschema3.part3_a_1 |  1 | f
+ testschema3.part3_a_2 |  5 | b
+ testschema3.part3_a_2 |  5 | d
+ testschema3.part3_a_2 |  5 | e
+ testschema3.part3_a_2 |  5 | f
+ testschema3.part3_a_3 |  9 | b
+ testschema3.part3_a_3 |  9 | d
+ testschema3.part3_a_3 |  9 | e
+ testschema3.part3_a_3 |  9 | f
+ testschema3.part3_c_1 |  1 | c
+ testschema3.part3_c_1 |  1 | a
+ testschema3.part3_c_2 |  5 | c
+ testschema3.part3_c_2 |  5 | a
+ testschema3.part3_c_3 |  9 | c
+ testschema3.part3_c_3 |  9 | a
+(18 rows)
 

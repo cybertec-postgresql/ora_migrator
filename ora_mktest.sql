@@ -158,67 +158,98 @@ COMMIT;
 /* connect as "testschema3" to create some partitioned tables */
 CONNECT testschema3/good_password
 
-CREATE TABLE part1 (c1 integer, c2 varchar2(100))
-  PARTITION BY LIST (c1) (
-    PARTITION part1_a VALUES (1, 2, 3),
-    PARTITION part1_b VALUES (4, 5),
-    PARTITION part1_default VALUES (DEFAULT)
-  );
+CREATE TABLE part1 (
+   c1 NUMBER(5) NOT NULL,
+   c2 VARCHAR2(100) NOT NULL
+)
+PARTITION BY LIST (c1) (
+   PARTITION part1_a VALUES (1, 2, 3),
+   PARTITION part1_b VALUES (4, 5),
+   PARTITION part1_default VALUES (DEFAULT)
+);
 
-INSERT INTO part1 (c1, c2) VALUES (1, null);
-INSERT INTO part1 (c1, c2) VALUES (5, null);
-INSERT INTO part1 (c1, c2) VALUES (10, null);
+INSERT INTO part1 (c1, c2) VALUES (1, 'one');
+INSERT INTO part1 (c1, c2) VALUES (5, 'five');
+INSERT INTO part1 (c1, c2) VALUES (10, 'ten');
 
-CREATE TABLE part2 (c1 integer, c2 varchar2(100))
-  PARTITION BY RANGE (c1) (
-    PARTITION part2_a VALUES LESS THAN (0),
-    PARTITION part2_b VALUES LESS THAN (100),
-    PARTITION part2_c VALUES LESS THAN (MAXVALUE)
-  );
+CREATE TABLE part2 (
+   r1 NUMBER(5) NOT NULL,
+   h1 VARCHAR2(100) NOT NULL,
+   h2 TIMESTAMP NOT NULL
+)
+PARTITION BY RANGE (r1)
+SUBPARTITION BY HASH (h1, h2) (
+   PARTITION part2_a VALUES LESS THAN (10) (
+      SUBPARTITION part2_a_1,
+      SUBPARTITION part2_a_2,
+      SUBPARTITION part2_a_3
+   ),
+   PARTITION part2_b VALUES LESS THAN (100) (
+      SUBPARTITION part2_b_1,
+      SUBPARTITION part2_b_2,
+      SUBPARTITION part2_b_3
+   ),
+   PARTITION part2_c VALUES LESS THAN (MAXVALUE) (
+      SUBPARTITION part2_c_1,
+      SUBPARTITION part2_c_2,
+      SUBPARTITION part2_c_3
+   )
+);
 
-INSERT INTO part2 (c1, c2) VALUES (-1, null);
-INSERT INTO part2 (c1, c2) VALUES (100, null);
-INSERT INTO part2 (c1, c2) VALUES (99, null);
+INSERT INTO part2 (r1, h1, h2)
+   VALUES (1, 'something', to_timestamp('2023-01-01 13:00:00', 'YYYY-MM-DD HH24:MI:SS'));
+INSERT INTO part2 (r1, h1, h2)
+   VALUES (1, 'other', to_timestamp('2023-01-01 23:00:00', 'YYYY-MM-DD HH24:MI:SS'));
+INSERT INTO part2 (r1, h1, h2)
+   VALUES (50, 'something', to_timestamp('2023-01-01 13:00:00', 'YYYY-MM-DD HH24:MI:SS'));
+INSERT INTO part2 (r1, h1, h2)
+   VALUES (50, 'other', to_timestamp('2023-01-01 23:00:00', 'YYYY-MM-DD HH24:MI:SS'));
+INSERT INTO part2 (r1, h1, h2)
+   VALUES (500, 'something', to_timestamp('2023-01-01 13:00:00', 'YYYY-MM-DD HH24:MI:SS'));
+INSERT INTO part2 (r1, h1, h2)
+   VALUES (500, 'other', to_timestamp('2023-01-01 23:00:00', 'YYYY-MM-DD HH24:MI:SS'));
 
-CREATE TABLE part3 (c1 integer, c2 varchar2(100))
-  PARTITION BY HASH (c1) (
-    PARTITION part3_a,
-    PARTITION part3_b,
-    PARTITION part3_c
-  );
+CREATE TABLE part3 (
+   c1 NUMBER(5),
+   c2 VARCHAR2(100)
+)
+PARTITION BY HASH (c2)
+SUBPARTITION BY LIST (c1) (
+   PARTITION part3_a (
+      SUBPARTITION part3_a_1 VALUES (1, 2, 3),
+      SUBPARTITION part3_a_2 VALUES (4, 5, 6),
+      SUBPARTITION part3_a_3 VALUES (7, 8, 9)
+   ),
+   PARTITION part3_b (
+      SUBPARTITION part3_b_1 VALUES (1, 2, 3),
+      SUBPARTITION part3_b_2 VALUES (4, 5, 6),
+      SUBPARTITION part3_b_3 VALUES (7, 8, 9)
+   ),
+   PARTITION part3_c (
+      SUBPARTITION part3_c_1 VALUES (1, 2, 3),
+      SUBPARTITION part3_c_2 VALUES (4, 5, 6),
+      SUBPARTITION part3_c_3 VALUES (DEFAULT)
+   )
+);
 
-INSERT INTO part3 (c, c2) VALUES (1, null);
-INSERT INTO part3 (c, c2) VALUES (11, null);
-INSERT INTO part3 (c, c2) VALUES (1111, null);
-
-CREATE TABLE part4 (c1 char(1), c2 date)
-  PARTITION BY LIST (c1)
-  SUBPARTITION BY RANGE (c2) (
-    PARTITION part4_a VALUES ('A') (
-      SUBPARTITION part4_a_2020 VALUES LESS THAN 
-        (TO_DATE('01-JAN-2021','dd-MON-yyyy')),
-      SUBPARTITION part4_a_2021 VALUES LESS THAN 
-        (TO_DATE('01-JAN-2022','dd-MON-yyyy')),
-      SUBPARTITION part4_a_2022 VALUES LESS THAN 
-        (TO_DATE('01-JAN-2023','dd-MON-yyyy'))
-    ),
-    PARTITION part4_b VALUES ('B') (
-      SUBPARTITION part4_b_2020 VALUES LESS THAN 
-        (TO_DATE('01-JAN-2021','dd-MON-yyyy')),
-      SUBPARTITION part4_b_2021 VALUES LESS THAN 
-        (TO_DATE('01-JAN-2022','dd-MON-yyyy')),
-      SUBPARTITION part4_b_2022 VALUES LESS THAN 
-        (TO_DATE('01-JAN-2023','dd-MON-yyyy'))
-    )
-  );
-
-INSERT INTO part4 (c1, c2) VALUES ('A', '31-DEC-2020');
-INSERT INTO part4 (c1, c2) VALUES ('A', '31-DEC-2021');
-INSERT INTO part4 (c1, c2) VALUES ('A', '31-DEC-2022');
-
-INSERT INTO part4 (c1, c2) VALUES ('B', '31-DEC-2020');
-INSERT INTO part4 (c1, c2) VALUES ('B', '31-DEC-2021');
-INSERT INTO part4 (c1, c2) VALUES ('B', '31-DEC-2022');
+INSERT INTO part3 (c1, c2) VALUES (1, 'a');
+INSERT INTO part3 (c1, c2) VALUES (5, 'a');
+INSERT INTO part3 (c1, c2) VALUES (9, 'a');
+INSERT INTO part3 (c1, c2) VALUES (1, 'b');
+INSERT INTO part3 (c1, c2) VALUES (5, 'b');
+INSERT INTO part3 (c1, c2) VALUES (9, 'b');
+INSERT INTO part3 (c1, c2) VALUES (1, 'c');
+INSERT INTO part3 (c1, c2) VALUES (5, 'c');
+INSERT INTO part3 (c1, c2) VALUES (9, 'c');
+INSERT INTO part3 (c1, c2) VALUES (1, 'd');
+INSERT INTO part3 (c1, c2) VALUES (5, 'd');
+INSERT INTO part3 (c1, c2) VALUES (9, 'd');
+INSERT INTO part3 (c1, c2) VALUES (1, 'e');
+INSERT INTO part3 (c1, c2) VALUES (5, 'e');
+INSERT INTO part3 (c1, c2) VALUES (9, 'e');
+INSERT INTO part3 (c1, c2) VALUES (1, 'f');
+INSERT INTO part3 (c1, c2) VALUES (5, 'f');
+INSERT INTO part3 (c1, c2) VALUES (9, 'f');
 
 COMMIT;
 

@@ -16,7 +16,7 @@ CREATE EXTENSION ora_migrator;
 
 /* create a foreign server and a user mapping */
 CREATE SERVER oracle FOREIGN DATA WRAPPER oracle_fdw
-   OPTIONS (dbserver 'localhost:1521/hr');
+   OPTIONS (dbserver '');
 
 CREATE USER MAPPING FOR PUBLIC SERVER oracle
    OPTIONS (user 'testschema1', password 'good_password');

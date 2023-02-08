@@ -1,3 +1,4 @@
+/* for requirements, see "migrate.sql" */
 
 /* connect as migration user */
 \connect - migrator
@@ -13,36 +14,32 @@ SELECT db_migrate_prepare(
    options => JSONB '{"max_long": 1024}'
 );
 
-/* perform the data migration */
+/* create foreign tables */
 SELECT db_migrate_mkforeign(
    plugin => 'ora_migrator',
    server => 'oracle',
    options => JSONB '{"max_long": 1024}'
 );
 
-/* migrate the rest of the database */
+/* migrate the data */
 SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );
 
-/* we have to check the log table before we drop the schema */
-SELECT operation, schema_name, object_name, failed_sql, error_message
-FROM pgsql_stage.migrate_log
-ORDER BY log_time;
+/* migrate the constraints */
+SELECT db_migrate_constraints(
+   plugin => 'ora_migrator'
+);
 
+/* clean up */
 SELECT db_migrate_finish();
 
 /* check results */
 
 \d+ testschema3.part1
 \d+ testschema3.part2
-\d testschema3.part3
-
-\d+ testschema3.part4
-\d+ testschema3.part4_a
-\d+ testschema3.part4_b
+\d+ testschema3.part3
 
 SELECT tableoid::regclass partname, * FROM testschema3.part1;
 SELECT tableoid::regclass partname, * FROM testschema3.part2;
 SELECT tableoid::regclass partname, * FROM testschema3.part3;
-SELECT tableoid::regclass partname, * FROM testschema3.part4;
