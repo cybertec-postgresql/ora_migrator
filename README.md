@@ -446,7 +446,8 @@ the Extension Building Infrastructure][pgxs].
 Support
 =======
 
-Create an [issue on Github][issue] or contact [Cybertec][cybertec].
+Create an [issue on Github][issue] or contact
+[CYBERTEC PostgreSQL International GmbH][cybertec].
 
 
  [issue]: https://github.com/cybertec-postgresql/ora_migrator/issues
