@@ -337,7 +337,8 @@ $$DECLARE
       '       schema,\n'
       '       table_name,\n'
       '       index_name,\n'
-      '       uniqueness\n'
+      '       uniqueness,\n'
+      '       NULL::text AS where_clause\n'
       'FROM %I.index_exp';
 
    partition_cols_sql text := E'CREATE FOREIGN TABLE %I.partition_columns (\n'
