@@ -159,10 +159,6 @@ SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );
 
-SELECT db_migrate_constraints(
-   plugin => 'ora_migrator'
-);
-
 SELECT db_migrate_functions(
    plugin => 'ora_migrator'
 );
@@ -172,6 +168,14 @@ SELECT db_migrate_triggers(
 );
 
 SELECT db_migrate_views(
+   plugin => 'ora_migrator'
+);
+
+SELECT db_migrate_indexes(
+   plugin => 'ora_migrator'
+);
+
+SELECT db_migrate_constraints(
    plugin => 'ora_migrator'
 );
 
