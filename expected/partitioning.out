@@ -59,6 +59,9 @@ SELECT db_migrate_finish();
  c1     | integer                |           | not null |         | plain    |              | 
  c2     | character varying(100) |           | not null |         | extended |              | 
 Partition key: LIST (c1)
+Not-null constraints:
+    "part1_c1_not_null" NOT NULL "c1"
+    "part1_c2_not_null" NOT NULL "c2"
 Partitions: testschema3.part1_a FOR VALUES IN (1, 2, 3),
             testschema3.part1_b FOR VALUES IN (4, 5),
             testschema3.part1_default DEFAULT
@@ -71,6 +74,10 @@ Partitions: testschema3.part1_a FOR VALUES IN (1, 2, 3),
  h1     | character varying(100)         |           | not null |         | extended |              | 
  h2     | timestamp(6) without time zone |           | not null |         | plain    |              | 
 Partition key: RANGE (r1)
+Not-null constraints:
+    "part2_r1_not_null" NOT NULL "r1"
+    "part2_h1_not_null" NOT NULL "h1"
+    "part2_h2_not_null" NOT NULL "h2"
 Partitions: testschema3.part2_a FOR VALUES FROM (MINVALUE) TO (10), PARTITIONED,
             testschema3.part2_b FOR VALUES FROM (10) TO (100), PARTITIONED,
             testschema3.part2_c FOR VALUES FROM (100) TO (MAXVALUE), PARTITIONED
