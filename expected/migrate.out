@@ -178,7 +178,7 @@ WHERE schema = 'testschema1'
 SELECT db_migrate_tables(
    plugin => 'ora_migrator'
 );
-WARNING:  Error loading table data for testschema1.baddata
+WARNING:  Error executing "INSERT INTO testschema1.baddata SELECT * FROM testschema1."baddata""
 DETAIL:  invalid byte sequence for encoding "UTF8": 0x00: 
  db_migrate_tables 
 -------------------
@@ -220,7 +220,7 @@ SELECT db_migrate_indexes(
 SELECT db_migrate_constraints(
    plugin => 'ora_migrator'
 );
-WARNING:  Error creating primary key or unique constraint on table testschema1.baddata
+WARNING:  Error executing "ALTER TABLE testschema1.baddata ADD CONSTRAINT baddata_pkey PRIMARY KEY (id) NOT DEFERRABLE INITIALLY IMMEDIATE"
 DETAIL:  relation "testschema1.baddata" does not exist: 
  db_migrate_constraints 
 ------------------------
