@@ -840,7 +840,7 @@ COMMENT ON FUNCTION oracle_tolower(text) IS
    'helper function to fold Oracle names to lower case';
 
 CREATE FUNCTION oracle_translate_expression(s text) RETURNS text
-   LANGUAGE plpgsql IMMUTABLE STRICT SET search_path FROM CURRENT AS
+   LANGUAGE plpgsql IMMUTABLE STRICT SET search_path = @extschema@ AS
 $$DECLARE
    r text;
 BEGIN
@@ -1151,16 +1151,12 @@ CREATE FUNCTION oracle_migrate_test_data(
 ) RETURNS bigint
    LANGUAGE plpgsql VOLATILE SET search_path = pg_catalog AS
 $$DECLARE
-   extschema text;
    v_schema  text;
    v_table   text;
    v_result  bigint;
 BEGIN
    /* set "search_path" to the FDW staging schema and the extension schema */
-   SELECT extnamespace::regnamespace::text INTO extschema
-      FROM pg_catalog.pg_extension
-      WHERE extname = 'ora_migrator';
-   EXECUTE format('SET LOCAL search_path = %I, %s', pgstage_schema, extschema);
+   EXECUTE format('SET LOCAL search_path = %I, @extschema@', pgstage_schema);
 
    /* translate schema names to lower case */
    only_schemas := array_agg(oracle_tolower(os)) FROM unnest(only_schemas) os;
@@ -1646,7 +1642,6 @@ CREATE FUNCTION oracle_replication_catchup(
 ) RETURNS void LANGUAGE plpgsql STRICT SET search_path = pg_catalog AS
 $$DECLARE
    v_old_path  text;
-   v_extschema text;
    v_tabschema name;
    v_tabname   name;
    v_from      timestamp without time zone;
@@ -1658,10 +1653,6 @@ BEGIN
    v_old_path := current_setting('search_path');
 
    EXECUTE format('SET LOCAL search_path = %I', pgstage_schema);
-
-   SELECT extnamespace::regnamespace::text INTO v_extschema
-   FROM pg_extension
-   WHERE extname = 'ora_migrator';
 
    /* get the "from" timestamp from the last saved timestamp */
    SELECT ts INTO v_from
@@ -1678,11 +1669,7 @@ BEGIN
       WHERE t.migrate
    LOOP
       /* catch up on a single table */
-      EXECUTE
-         format(
-            'SELECT %s.oracle_catchup_table($1, $2, $3, $4)',
-            v_extschema
-         )
+      EXECUTE 'SELECT @extschema@.oracle_catchup_table($1, $2, $3, $4)'
       USING v_tabschema, v_tabname, v_from, v_to;
    END LOOP;
 
@@ -1695,11 +1682,7 @@ BEGIN
       FROM sequences
    LOOP
       /* catch up on a single sequence */
-      EXECUTE
-         format(
-            'SELECT %s.oracle_catchup_sequence($1, $2, $3)',
-            v_extschema
-         )
+      EXECUTE 'SELECT @extschema@.oracle_catchup_sequence($1, $2, $3)'
       USING v_seqschema, v_seqname, staging_schema;
    END LOOP;
 
