@@ -4,7 +4,7 @@
 
 - Adapt to changes in `db_migrator` version 1.1.0.
 
-- Make the extension non-relocatable.  
+- Make the extension non-relocatable.
   This simplifies the code, and it should be no problem: you can always drop
   and re-create the extension.
 
@@ -12,5 +12,5 @@
 
 ## Enhancements: ##
 
-- Add support for migrating partitioned tables.  
+- Add support for migrating partitioned tables.
   Patch by Florent Jardin.

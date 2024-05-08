@@ -51,6 +51,30 @@ $$DECLARE
          '  AND owner NOT IN (' || sys_schemas || E')'
       ')'', max_long ''%s'', readonly ''true'')';
 
+   table_comments text := E'CREATE FOREIGN TABLE %I.table_comments (\n'
+      '   schema     text NOT NULL,\n'
+      '   table_name text NOT NULL,\n'
+      '   table_comment text NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT owner,\n'
+         '       table_name\n'
+         'FROM dba_tables t\n'
+         'INNER JOIN dba_tab_comments c\n'
+         '   ON t.owner = c.owner\n'
+         '  AND t.table_name = c.table_name\n'
+         'WHERE t.temporary = ''''N''''\n'
+         '  AND t.secondary = ''''N''''\n'
+         '  AND t.nested    = ''''NO''''\n'
+         '  AND t.dropped   = ''''NO''''\n'
+         '  AND (t.owner, t.table_name)\n'
+         '     NOT IN (SELECT owner, mview_name\n'
+         '             FROM dba_mviews)\n'
+         '  AND (t.owner, t.table_name)\n'
+         '     NOT IN (SELECT log_owner, log_table\n'
+         '             FROM dba_mview_logs)\n'
+         '  AND t.owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
    columns_sql text := E'CREATE FOREIGN TABLE %I.columns (\n'
       '   schema        text    NOT NULL,\n'
       '   table_name    text    NOT NULL,\n'
@@ -77,6 +101,42 @@ $$DECLARE
          '       CASE WHEN col.nullable = ''''Y'''' THEN 1 ELSE 0 END AS nullable,\n'
          '       col.data_default\n'
          'FROM dba_tab_columns col\n'
+         '   JOIN (SELECT owner, table_name\n'
+         '            FROM dba_tables\n'
+         '            WHERE owner NOT IN (' || sys_schemas || E')\n'
+         '              AND temporary = ''''N''''\n'
+         '              AND secondary = ''''N''''\n'
+         '              AND nested    = ''''NO''''\n'
+         '              AND dropped   = ''''NO''''\n'
+         '         UNION SELECT owner, view_name\n'
+         '            FROM dba_views\n'
+         '            WHERE owner NOT IN (' || sys_schemas || E')\n'
+         '        ) tab\n'
+         '      ON tab.owner = col.owner AND tab.table_name = col.table_name\n'
+         'WHERE (col.owner, col.table_name)\n'
+         '     NOT IN (SELECT owner, mview_name\n'
+         '             FROM dba_mviews)\n'
+         '  AND (col.owner, col.table_name)\n'
+         '     NOT IN (SELECT log_owner, log_table\n'
+         '             FROM dba_mview_logs)\n'
+         '  AND col.owner NOT IN (' || sys_schemas || E')'
+      ')'', max_long ''%s'', readonly ''true'')';
+
+   column_comments text := E'CREATE FOREIGN TABLE %I.column_comments (\n'
+      '   schema        text    NOT NULL,\n'
+      '   table_name    text    NOT NULL,\n'
+      '   column_name   text    NOT NULL,\n'
+      '   comment       text    NOT NULL\n'
+      ') SERVER %I OPTIONS (table ''('
+         'SELECT col.owner,\n'
+         '       col.table_name,\n'
+         '       col.column_name,\n'
+         '        cc.comments\n'
+         'FROM dba_tab_columns col\n'
+         'JOIN dba_col_comments cc\n'
+         '  ON cc.owner = col.owner\n'
+         ' AND cc.table_name = col.table_name\n'
+         ' AND cc.column_id = col.column_id\n'
          '   JOIN (SELECT owner, table_name\n'
          '            FROM dba_tables\n'
          '            WHERE owner NOT IN (' || sys_schemas || E')\n'
@@ -727,10 +787,18 @@ BEGIN
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.tables', schema);
    EXECUTE format(tables_sql, schema, server, v_max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.tables IS ''Oracle tables on foreign server "%I"''', schema, server);
+   /* table comments */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.table_comments', schema);
+   EXECUTE format(table_comments, schema, server, v_max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.table_comments IS ''Oracle comments for tables on foreign server "%I"''', schema, server);
    /* columns */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.columns', schema);
    EXECUTE format(columns_sql, schema, server, v_max_long);
    EXECUTE format('COMMENT ON FOREIGN TABLE %I.columns IS ''columns of Oracle tables and views on foreign server "%I"''', schema, server);
+   /* column comments */
+   EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.column_comments', schema);
+   EXECUTE format(column_comments, schema, server, v_max_long);
+   EXECUTE format('COMMENT ON FOREIGN TABLE %I.column_comments IS ''Oracle comments for columns of tables and views on foreign server "%I"''', schema, server);
    /* checks */
    EXECUTE format('DROP FOREIGN TABLE IF EXISTS %I.checks', schema);
    EXECUTE format(checks_sql, schema, server, v_max_long);
