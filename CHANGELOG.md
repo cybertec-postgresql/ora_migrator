@@ -12,5 +12,5 @@
 
 ## Enhancements: ##
 
-- Add support for migrating partitioned tables.
+- Add support for migrating partitioned tables.  
   Patch by Florent Jardin.
