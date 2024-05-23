@@ -239,6 +239,19 @@ SELECT operation, schema_name, object_name, failed_sql, error_message
 FROM pgsql_stage.migrate_log
 ORDER BY log_time;
 
+/* also check the foreign tables with the comments */
+SELECT *
+FROM fdw_stage.table_comments
+WHERE schema = 'TESTSCHEMA1'
+  AND table_comment IS NOT NULL
+ORDER BY schema, table_name;
+
+SELECT *
+FROM fdw_stage.column_comments
+WHERE schema = 'TESTSCHEMA1'
+  AND comment IS NOT NULL
+ORDER BY schema, table_name, column_name;
+
 SELECT db_migrate_finish();
 
 /* clean up Oracle test data */

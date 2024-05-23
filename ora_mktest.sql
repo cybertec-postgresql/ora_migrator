@@ -57,6 +57,10 @@ CREATE TABLE tab1 (
    ts         TIMESTAMP
 ) SEGMENT CREATION IMMEDIATE;
 
+COMMENT ON TABLE tab1 IS 'The first test table';
+COMMENT ON COLUMN tab1.id IS 'The primary key column';
+COMMENT ON COLUMN tab1.bf IS 'A useless comment';
+
 CREATE TABLE log (
    username   VARCHAR2(128 CHAR)        CONSTRAINT log_user_null NOT NULL,
    logts      TIMESTAMP WITH LOCAL TIME ZONE CONSTRAINT log_logts_null NOT NULL,

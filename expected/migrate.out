@@ -324,6 +324,28 @@ ORDER BY log_time;
  unique constraint | testschema1 | baddata     | ALTER TABLE testschema1.baddata ADD CONSTRAINT baddata_pkey PRIMARY KEY (id) NOT DEFERRABLE INITIALLY IMMEDIATE | relation "testschema1.baddata" does not exist: 
 (2 rows)
 
+/* also check the foreign tables with the comments */
+SELECT *
+FROM fdw_stage.table_comments
+WHERE schema = 'TESTSCHEMA1'
+  AND table_comment IS NOT NULL
+ORDER BY schema, table_name;
+   schema    | table_name |    table_comment     
+-------------+------------+----------------------
+ TESTSCHEMA1 | TAB1       | The first test table
+(1 row)
+
+SELECT *
+FROM fdw_stage.column_comments
+WHERE schema = 'TESTSCHEMA1'
+  AND comment IS NOT NULL
+ORDER BY schema, table_name, column_name;
+   schema    | table_name | column_name |        comment         
+-------------+------------+-------------+------------------------
+ TESTSCHEMA1 | TAB1       | BF          | A useless comment
+ TESTSCHEMA1 | TAB1       | ID          | The primary key column
+(2 rows)
+
 SELECT db_migrate_finish();
  db_migrate_finish 
 -------------------
