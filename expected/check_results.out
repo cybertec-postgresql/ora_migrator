@@ -29,7 +29,7 @@ primary key, btree, for table "testschema1.log"
                          Sequence "testschema1.seq1"
   Type  | Start | Minimum |       Maximum       | Increment | Cycles? | Cache 
 --------+-------+---------+---------------------+-----------+---------+-------
- bigint |     2 |       1 | 9223372036854775807 |         5 | no      |    10
+ bigint |     6 |       1 | 9223372036854775807 |         5 | no      |    10
 
                                      Table "testschema1.tab1"
  Column |              Type              | Collation | Nullable |             Default             
