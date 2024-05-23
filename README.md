@@ -163,6 +163,27 @@ indexes in Oracle.
 
 This view can help to assess the migration costs for an Oracle database.
 
+### table comments ###
+
+    table_comments (
+       schema          text    NOT NULL,
+       table_name      text    NOT NULL,
+       table_comment   bigint  NOT NULL
+    )
+
+- `table_comment` is an comment to table in Oracle DB.
+
+### table column comments ###
+
+    column_comments (
+       schema          text    NOT NULL,
+       table_name      text    NOT NULL,
+       column_name     text    NOT NULL,
+       comment         text    NOT NULL
+    )
+
+- `comment` is an comment to table column in Oracle DB.
+
 Additional objects
 ------------------
 
